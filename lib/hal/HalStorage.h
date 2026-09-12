@@ -64,6 +64,7 @@ class HalStorage {
   bool openFileForWrite(const char* moduleName, const char* path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const std::string& path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const String& path, HalFile& file);
+  bool openFileForAppend(const char* moduleName, const char* path, HalFile& file);
   bool removeDir(const char* path);
 
   static HalStorage& getInstance() { return instance; }
@@ -99,6 +100,9 @@ class HalFile : public Print {
   size_t fileSize();
   uint64_t fileSize64();
   uint32_t modificationTime();
+  // FAT/exFAT packed modification timestamp. Exposed through the HAL so callers
+  // can detect source changes without bypassing storageMutex.
+  bool getModifyDateTime(uint16_t& date, uint16_t& time);
   bool seek(size_t pos);
   bool seek64(uint64_t pos);
   bool seekCur(int64_t offset);
@@ -111,6 +115,7 @@ class HalFile : public Print {
   size_t write(const void* buf, size_t count);
   size_t write(uint8_t b) override;
   bool rename(const char* newPath);
+  bool truncate(uint64_t length);
   bool isDirectory() const;
   void rewindDirectory();
   bool close();

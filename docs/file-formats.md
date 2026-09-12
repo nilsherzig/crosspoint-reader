@@ -497,3 +497,7 @@ make a real book disappear.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## Flashcard caches
+
+Flashcard cache and history formats are implemented in `lib/Flashcards/FlashcardStore.cpp` and described, together with their invalidation and recovery behavior, in [flashcards.md](flashcards.md). Both formats currently use version **1** and explicit little-endian fields rather than serialized C++ structs.

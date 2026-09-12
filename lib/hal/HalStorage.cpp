@@ -2,6 +2,7 @@
 
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
 #include <Logging.h>
+#include <Memory.h>
 #include <SDCardManager.h>
 #if FREEINK_CAP_USB_MSC
 #include <UsbMassStorage.h>
@@ -216,6 +217,24 @@ bool HalStorage::openFileForWrite(const char* moduleName, const String& path, Ha
   return openFileForWrite(moduleName, path.c_str(), file);
 }
 
+bool HalStorage::openFileForAppend(const char* moduleName, const char* path, HalFile& file) {
+  StorageLock lock;
+  FsFile fsFile = SDCard.open(path, O_RDWR | O_CREAT);
+  if (!fsFile || !fsFile.seekEnd()) {
+    LOG_ERR(moduleName, "Failed to open file for append: %s", path);
+    file = HalFile();
+    return false;
+  }
+  auto impl = makeUniqueNoThrow<HalFile::Impl>(std::move(fsFile));
+  if (!impl) {
+    LOG_ERR(moduleName, "OOM: HalFile::Impl");
+    file = HalFile();
+    return false;
+  }
+  file = HalFile(std::move(impl));
+  return true;
+}
+
 bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDir, path); }
 
 // HalFile implementation
@@ -243,6 +262,9 @@ uint32_t HalFile::modificationTime() {
   if (!impl || !impl->file.getModifyDateTime(&date, &time) || date == 0) return 0;
   return (static_cast<uint32_t>(date) << 16) | time;
 }
+bool HalFile::getModifyDateTime(uint16_t& date, uint16_t& time) {
+  HAL_FILE_WRAPPED_CALL(getModifyDateTime, &date, &time);
+}
 bool HalFile::seek(size_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seek64(uint64_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
@@ -255,6 +277,7 @@ size_t HalFile::write(const uint8_t* buf, size_t count) { HAL_FILE_WRAPPED_CALL(
 size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
+bool HalFile::truncate(uint64_t length) { HAL_FILE_WRAPPED_CALL(truncate, length); }
 bool HalFile::isDirectory() const { HAL_FILE_FORWARD_CALL(isDirectory, ); }  // already thread-safe, no need to wrap
 void HalFile::rewindDirectory() { HAL_FILE_WRAPPED_CALL(rewindDirectory, ); }
 bool HalFile::close() { HAL_FILE_WRAPPED_CALL(close, ); }
