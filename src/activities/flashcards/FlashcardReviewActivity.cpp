@@ -19,6 +19,8 @@ FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedIn
 
 void FlashcardReviewActivity::onEnter() {
   Activity::onEnter();
+  LOG_DBG("FLASH", "Study session opening: deck=%s cards=%lu", deck.name.c_str(),
+          static_cast<unsigned long>(deck.cardCount));
   resetUi();
   app.on(ACTION_REVEAL, &FlashcardReviewActivity::actionTrampoline, this);
   app.on(ACTION_AGAIN, &FlashcardReviewActivity::actionTrampoline, this);
@@ -48,11 +50,14 @@ void FlashcardReviewActivity::onEnter() {
   phase = queue.dueCards.empty() ? Phase::New : Phase::Due;
   if (phase == Phase::New && queue.newCards.empty()) phase = Phase::Complete;
   phasePosition = 0;
+  LOG_DBG("FLASH", "Study session ready: deck=%s phase=%s due=%u new=%u", deck.name.c_str(), phaseName(),
+          static_cast<unsigned>(queue.dueCards.size()), static_cast<unsigned>(queue.newCards.size()));
   if (phase != Phase::Complete && !loadCurrentCard()) return;
   requestUpdate();
 }
 
 void FlashcardReviewActivity::onExit() {
+  LOG_DBG("FLASH", "Study session closing: deck=%s phase=%s", deck.name.c_str(), phaseName());
   queue = flashcards::StudyQueue{};
   frontText.clear();
   backText.clear();
@@ -101,7 +106,15 @@ void FlashcardReviewActivity::loop() {
   if (route.routed && app.invalidated()) requestUpdate();
 }
 
-void FlashcardReviewActivity::render(RenderLock&&) { renderUi(); }
+void FlashcardReviewActivity::render(RenderLock&&) {
+  [[maybe_unused]] const uint32_t startedMicros = micros();
+  LOG_DBG("FLASH", "Screen render started: phase=%s answer=%s", phaseName(), answerShown ? "shown" : "hidden");
+  renderer.clearScreen();
+  renderUi();
+  renderer.displayBuffer();
+  LOG_DBG("FLASHPERF", "op=render_screen status=ok duration_us=%lu phase=%s answer=%s",
+          static_cast<unsigned long>(micros() - startedMicros), phaseName(), answerShown ? "shown" : "hidden");
+}
 
 void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   const auto& theme = screen.theme();
@@ -112,8 +125,7 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   if (phase == Phase::Complete || phase == Phase::Error) {
     fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
     screen.footer(done, 1);
-    screen.centeredText(phase == Phase::Complete ? tr(STR_FLASHCARD_SESSION_COMPLETE) : errorText(),
-                        theme.bodyText);
+    screen.centeredText(phase == Phase::Complete ? tr(STR_FLASHCARD_SESSION_COMPLETE) : errorText(), theme.bodyText);
     return;
   }
 
@@ -126,12 +138,41 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   }
 
   const fui::Rect body = screen.body();
-  fui::TextStyle textStyle = answerShown ? theme.bodyText : theme.titleText;
-  const int16_t lineHeight = screen.target().lineHeight(textStyle.font);
-  textStyle.align = fui::TextAlign::Center;
-  textStyle.maxLines = static_cast<uint8_t>(std::clamp<int>(lineHeight > 0 ? body.height / lineHeight : 1, 1, 255));
-  screen.target().text(body, answerShown ? backText.c_str() : frontText.c_str(), textStyle);
-  if (!answerShown) screen.frame().hit(body, ACTION_REVEAL, 0, fui::InputTouch);
+  const int16_t sectionGap = theme.spaceLg;
+  const int16_t sectionHeight = std::max<int16_t>(0, static_cast<int16_t>(body.height - sectionGap)) / 2;
+  const fui::Rect questionRect{body.x, body.y, body.width, sectionHeight};
+  const fui::Rect answerRect{body.x, static_cast<int16_t>(questionRect.bottom() + sectionGap), body.width,
+                             static_cast<int16_t>(body.bottom() - questionRect.bottom() - sectionGap)};
+
+  // The question keeps the same rectangle and style before and after reveal so it never jumps between refreshes.
+  fui::TextStyle questionStyle = theme.titleText;
+  const int16_t questionLineHeight = screen.target().lineHeight(questionStyle.font);
+  questionStyle.align = fui::TextAlign::Left;
+  questionStyle.maxLines = static_cast<uint8_t>(
+      std::clamp<int>(questionLineHeight > 0 ? questionRect.height / questionLineHeight : 1, 1, 255));
+  screen.target().text(questionRect, frontText.c_str(), questionStyle);
+
+  if (!answerShown) {
+    screen.frame().hit(body, ACTION_REVEAL, 0, fui::InputTouch);
+    return;
+  }
+
+  const int16_t separatorY = static_cast<int16_t>(questionRect.bottom() + sectionGap / 2);
+  screen.target().line(fui::Point{body.x, separatorY}, fui::Point{static_cast<int16_t>(body.right() - 1), separatorY},
+                       std::max<uint8_t>(theme.headerUnderline, 1), fui::Paint::solid(theme.bodyText.color));
+
+  fui::TextStyle answerStyle = theme.bodyText;
+  const int16_t answerLineHeight = screen.target().lineHeight(answerStyle.font);
+  answerStyle.align = fui::TextAlign::Left;
+  answerStyle.maxLines =
+      static_cast<uint8_t>(std::clamp<int>(answerLineHeight > 0 ? answerRect.height / answerLineHeight : 1, 1, 255));
+  screen.target().text(answerRect, backText.c_str(), answerStyle);
+
+  const int16_t leftWidth = body.width / 2;
+  screen.frame().hit(fui::Rect{body.x, body.y, leftWidth, body.height}, ACTION_AGAIN, 0, fui::InputTouch);
+  screen.frame().hit(fui::Rect{static_cast<int16_t>(body.x + leftWidth), body.y,
+                               static_cast<int16_t>(body.width - leftWidth), body.height},
+                     ACTION_GOOD, 0, fui::InputTouch);
 }
 
 void FlashcardReviewActivity::handleAction(const fui::ActionId action) {
@@ -149,17 +190,25 @@ void FlashcardReviewActivity::handleAction(const fui::ActionId action) {
 
 void FlashcardReviewActivity::reveal() {
   if (phase == Phase::Complete || phase == Phase::Error || answerShown) return;
+  LOG_DBG("FLASH", "Reveal requested: phase=%s source_order=%lu", phaseName(),
+          static_cast<unsigned long>(queue.cards[currentCardIndex].sourceOrder));
   std::string detail;
   if (!flashcards::FlashcardStore::readCardText(deck, queue.cards[currentCardIndex], true, backText, detail)) {
     showError(ErrorKind::Deck, detail);
     return;
   }
   answerShown = true;
+  LOG_DBG("FLASH", "Answer ready: source_order=%lu bytes=%u",
+          static_cast<unsigned long>(queue.cards[currentCardIndex].sourceOrder),
+          static_cast<unsigned>(backText.size()));
   requestUpdate();
 }
 
 void FlashcardReviewActivity::rate(const flashcards::Rating rating) {
   if (!answerShown || phase == Phase::Complete || phase == Phase::Error) return;
+  LOG_DBG("FLASH", "Rating requested: phase=%s source_order=%lu rating=%s", phaseName(),
+          static_cast<unsigned long>(queue.cards[currentCardIndex].sourceOrder),
+          rating == flashcards::Rating::Again ? "again" : "good");
   int64_t now = 0;
   if (!halClock.getUnixTime(now)) {
     showError(ErrorKind::Clock, "RTC read failed during review");
@@ -176,6 +225,8 @@ void FlashcardReviewActivity::rate(const flashcards::Rating rating) {
 void FlashcardReviewActivity::advance(const bool repeat) {
   std::vector<uint16_t>& active = currentPhaseQueue();
   const uint16_t reviewed = currentCardIndex;
+  LOG_DBG("FLASH", "Advancing session: phase=%s position=%u repeat=%s", phaseName(),
+          static_cast<unsigned>(phasePosition), repeat ? "yes" : "no");
   ++phasePosition;
   if (repeat) {
     if (active.size() == active.capacity() && phasePosition > 0) {
@@ -194,9 +245,11 @@ bool FlashcardReviewActivity::loadCurrentCard() {
     if (phase == Phase::Due) {
       phase = Phase::New;
       phasePosition = 0;
+      LOG_DBG("FLASH", "Session phase changed: phase=%s", phaseName());
       continue;
     }
     phase = Phase::Complete;
+    LOG_DBG("FLASH", "Study session complete: deck=%s", deck.name.c_str());
     progressText[0] = '\0';
     frontText.clear();
     backText.clear();
@@ -206,6 +259,9 @@ bool FlashcardReviewActivity::loadCurrentCard() {
 
   currentCardIndex = currentPhaseQueue()[phasePosition];
   flashcards::StudyCard& card = queue.cards[currentCardIndex];
+  LOG_DBG("FLASH", "Loading card: phase=%s position=%u/%u source_order=%lu", phaseName(),
+          static_cast<unsigned>(phasePosition + 1), static_cast<unsigned>(currentPhaseQueue().size()),
+          static_cast<unsigned long>(card.sourceOrder));
   int64_t now = 0;
   std::string detail;
   if (!halClock.getUnixTime(now)) {
@@ -228,7 +284,7 @@ bool FlashcardReviewActivity::loadCurrentCard() {
 }
 
 void FlashcardReviewActivity::showError(const ErrorKind kind, const std::string& detail) {
-  LOG_ERR("FLASH", "%s", detail.c_str());
+  LOG_ERR("FLASH", "Session error: kind=%u detail=%s", static_cast<unsigned>(kind), detail.c_str());
   phase = Phase::Error;
   errorKind = kind;
   progressText[0] = '\0';
@@ -237,6 +293,21 @@ void FlashcardReviewActivity::showError(const ErrorKind kind, const std::string&
 
 std::vector<uint16_t>& FlashcardReviewActivity::currentPhaseQueue() {
   return phase == Phase::Due ? queue.dueCards : queue.newCards;
+}
+
+const char* FlashcardReviewActivity::phaseName() const {
+  switch (phase) {
+    case Phase::Due:
+      return "due";
+    case Phase::New:
+      return "new";
+    case Phase::Complete:
+      return "complete";
+    case Phase::Error:
+      return "error";
+    default:
+      return "unknown";
+  }
 }
 
 const char* FlashcardReviewActivity::errorText() const {

@@ -2,6 +2,7 @@ add_executable(flashcards_tests
   FlashcardsTests.cpp
   ${REPO_ROOT}/lib/Flashcards/CsvReader.cpp
   ${REPO_ROOT}/lib/Flashcards/FsrsScheduler.cpp
+  ${REPO_ROOT}/lib/Flashcards/StudyQueueBuilder.cpp
 )
 
 target_include_directories(flashcards_tests PRIVATE

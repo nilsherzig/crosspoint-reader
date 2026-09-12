@@ -1,24 +1,27 @@
 #include "FlashcardStore.h"
 
-#include "CsvReader.h"
-
 #include <BufferedFile.h>
+#include <HalMemory.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 
+#include "CsvReader.h"
+#include "StudyQueueBuilder.h"
+
 namespace flashcards {
 namespace {
 constexpr char MODULE[] = "FLASH";
+constexpr char PERF_MODULE[] = "FLASHPERF";
 constexpr char CACHE_DIRECTORY[] = "/.crosspoint/flashcards";
 constexpr uint32_t CACHE_MAGIC = 0x31444346;  // FCD1
 constexpr uint16_t CACHE_VERSION = 1;
@@ -30,6 +33,54 @@ constexpr size_t HISTORY_RECORD_SIZE = 60;
 constexpr size_t BLOOM_BYTES = 8192;
 constexpr size_t IO_BUFFER_BYTES = 1024;
 constexpr size_t MAX_CARD_TEXT_BYTES = 16384;
+
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
+class PerfTrace {
+ public:
+  explicit PerfTrace(const char* operation)
+      : operation(operation), startedMicros(micros()), internalBefore(HalMemory::getInternalHeap()) {
+#ifdef BOARD_HAS_PSRAM
+    psramBefore = HalMemory::getPsramHeap();
+#endif
+  }
+
+  ~PerfTrace() {
+    const uint32_t durationMicros = micros() - startedMicros;
+    const auto internalAfter = HalMemory::getInternalHeap();
+    LOG_DBG(PERF_MODULE,
+            "op=%s status=%s duration_us=%lu pool=internal free_before=%zu free_after=%zu "
+            "largest_before=%zu largest_after=%zu min_free=%zu",
+            operation, succeeded ? "ok" : "error", static_cast<unsigned long>(durationMicros), internalBefore.freeBytes,
+            internalAfter.freeBytes, internalBefore.largestBlockBytes, internalAfter.largestBlockBytes,
+            internalAfter.minFreeBytes);
+#ifdef BOARD_HAS_PSRAM
+    const auto psramAfter = HalMemory::getPsramHeap();
+    LOG_DBG(PERF_MODULE,
+            "op=%s status=%s duration_us=%lu pool=psram free_before=%zu free_after=%zu "
+            "largest_before=%zu largest_after=%zu min_free=%zu",
+            operation, succeeded ? "ok" : "error", static_cast<unsigned long>(durationMicros), psramBefore.freeBytes,
+            psramAfter.freeBytes, psramBefore.largestBlockBytes, psramAfter.largestBlockBytes, psramAfter.minFreeBytes);
+#endif
+  }
+
+  void markSuccess() { succeeded = true; }
+
+ private:
+  const char* operation;
+  uint32_t startedMicros;
+  HalMemory::HeapStats internalBefore;
+#ifdef BOARD_HAS_PSRAM
+  HalMemory::HeapStats psramBefore;
+#endif
+  bool succeeded = false;
+};
+#else
+class PerfTrace {
+ public:
+  explicit PerfTrace(const char*) {}
+  void markSuccess() {}
+};
+#endif
 
 struct CacheHeader {
   uint64_t sourceSize = 0;
@@ -53,13 +104,11 @@ struct HistoryEvent {
   int32_t introducedDay = -1;
 };
 
-uint16_t getU16(const uint8_t* data) {
-  return static_cast<uint16_t>(data[0]) | static_cast<uint16_t>(data[1]) << 8;
-}
+uint16_t getU16(const uint8_t* data) { return static_cast<uint16_t>(data[0]) | static_cast<uint16_t>(data[1]) << 8; }
 
 uint32_t getU32(const uint8_t* data) {
-  return static_cast<uint32_t>(data[0]) | static_cast<uint32_t>(data[1]) << 8 |
-         static_cast<uint32_t>(data[2]) << 16 | static_cast<uint32_t>(data[3]) << 24;
+  return static_cast<uint32_t>(data[0]) | static_cast<uint32_t>(data[1]) << 8 | static_cast<uint32_t>(data[2]) << 16 |
+         static_cast<uint32_t>(data[3]) << 24;
 }
 
 uint64_t getU64(const uint8_t* data) {
@@ -112,9 +161,7 @@ bool readExact(serialization::BufferedFileReader& reader, void* data, const size
   return reader.read(data, length) == length;
 }
 
-bool writeExact(HalFile& file, const void* data, const size_t length) {
-  return file.write(data, length) == length;
-}
+bool writeExact(HalFile& file, const void* data, const size_t length) { return file.write(data, length) == length; }
 
 void encodeHeader(const CacheHeader& header, uint8_t* data) {
   memset(data, 0, CACHE_HEADER_SIZE);
@@ -131,8 +178,7 @@ void encodeHeader(const CacheHeader& header, uint8_t* data) {
 }
 
 bool decodeHeader(const uint8_t* data, CacheHeader& header) {
-  if (getU32(data) != CACHE_MAGIC || getU16(data + 4) != CACHE_VERSION ||
-      getU16(data + 6) != CACHE_HEADER_SIZE) {
+  if (getU32(data) != CACHE_MAGIC || getU16(data + 4) != CACHE_VERSION || getU16(data + 6) != CACHE_HEADER_SIZE) {
     return false;
   }
   header.sourceSize = getU64(data + 8);
@@ -184,8 +230,8 @@ void encodeHistoryEvent(const HistoryEvent& event, uint8_t* data) {
 }
 
 bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
-  if (getU32(data) != HISTORY_MAGIC || getU16(data + 4) != HISTORY_VERSION ||
-      getU16(data + 6) != HISTORY_RECORD_SIZE || getU32(data + 56) != crc32(data, 56)) {
+  if (getU32(data) != HISTORY_MAGIC || getU16(data + 4) != HISTORY_VERSION || getU16(data + 6) != HISTORY_RECORD_SIZE ||
+      getU32(data + 56) != crc32(data, 56)) {
     return false;
   }
   event.type = static_cast<HistoryType>(data[8]);
@@ -202,11 +248,9 @@ bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
   event.due = getI64(data + 44);
   event.introducedDay = static_cast<int32_t>(getU32(data + 52));
   if (event.timestamp < 0 || event.due < 0 || event.introducedDay < 0) return false;
-  return event.type != HistoryType::Review ||
-         (std::isfinite(event.memory.stability) && event.memory.stability > 0.0f &&
-          std::isfinite(event.memory.difficulty) && event.memory.difficulty >= 1.0f &&
-          event.memory.difficulty <= 10.0f);
-
+  return event.type != HistoryType::Review || (std::isfinite(event.memory.stability) && event.memory.stability > 0.0f &&
+                                               std::isfinite(event.memory.difficulty) &&
+                                               event.memory.difficulty >= 1.0f && event.memory.difficulty <= 10.0f);
 }
 
 uint64_t fnvUpdate(uint64_t hash, const uint8_t* data, const size_t length) {
@@ -298,6 +342,7 @@ bool readCacheHeader(const char* path, CacheHeader& header) {
 }
 
 bool validateCachePayload(const char* path, const CacheHeader& header) {
+  PerfTrace perf("validate_cache");
   HalFile file;
   if (!Storage.openFileForRead(MODULE, path, file) || !file.seek(CACHE_HEADER_SIZE)) return false;
   serialization::BufferedFileReader reader(file, IO_BUFFER_BYTES);
@@ -314,7 +359,14 @@ bool validateCachePayload(const char* path, const CacheHeader& header) {
     crc = updateCrc(crc, buffer.get(), chunk);
     remaining -= chunk;
   }
-  return (crc ^ 0xFFFFFFFFU) == header.payloadCrc;
+  const uint32_t actualCrc = crc ^ 0xFFFFFFFFU;
+  if (actualCrc != header.payloadCrc) {
+    LOG_DBG(MODULE, "Cache CRC mismatch: path=%s expected=%08lx actual=%08lx", path,
+            static_cast<unsigned long>(header.payloadCrc), static_cast<unsigned long>(actualCrc));
+    return false;
+  }
+  perf.markSuccess();
+  return true;
 }
 
 bool duplicateExists(const char* recordsPath, const uint32_t count, const Fingerprint& fingerprint) {
@@ -353,6 +405,8 @@ bool copyInto(serialization::BufferedFileWriter& output, const char* inputPath, 
 
 bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourceSize, const uint16_t fatDate,
                 const uint16_t fatTime, CacheHeader& imported, std::string& error) {
+  PerfTrace perf("import_deck");
+  LOG_DBG(MODULE, "Import started: path=%s bytes=%llu", sourcePath, static_cast<unsigned long long>(sourceSize));
   char cachePath[96];
   char recordsPath[96];
   char textPath[96];
@@ -361,8 +415,7 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
   snprintf(recordsPath, sizeof(recordsPath), "%s/%016llx.records.tmp", CACHE_DIRECTORY,
            static_cast<unsigned long long>(key));
   snprintf(textPath, sizeof(textPath), "%s/%016llx.text.tmp", CACHE_DIRECTORY, static_cast<unsigned long long>(key));
-  snprintf(finalPath, sizeof(finalPath), "%s/%016llx.cards.tmp", CACHE_DIRECTORY,
-           static_cast<unsigned long long>(key));
+  snprintf(finalPath, sizeof(finalPath), "%s/%016llx.cards.tmp", CACHE_DIRECTORY, static_cast<unsigned long long>(key));
   Storage.remove(recordsPath);
   Storage.remove(textPath);
   Storage.remove(finalPath);
@@ -370,8 +423,8 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
   HalFile source;
   HalFile records;
   HalFile text;
-  if (!Storage.openFileForRead(MODULE, sourcePath, source) ||
-      !Storage.openFileForWrite(MODULE, recordsPath, records) || !Storage.openFileForWrite(MODULE, textPath, text)) {
+  if (!Storage.openFileForRead(MODULE, sourcePath, source) || !Storage.openFileForWrite(MODULE, recordsPath, records) ||
+      !Storage.openFileForWrite(MODULE, textPath, text)) {
     error = "Could not open import files";
     return false;
   }
@@ -435,7 +488,8 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
     bool emptyRow = true;
     for (const auto& field : fields) emptyRow &= field.empty();
     if (emptyRow) continue;
-    if (frontIndex >= fields.size() || backIndex >= fields.size() || fields[frontIndex].empty() || fields[backIndex].empty()) {
+    if (frontIndex >= fields.size() || backIndex >= fields.size() || fields[frontIndex].empty() ||
+        fields[backIndex].empty()) {
       error = "Row " + std::to_string(rowNumber) + ": front and back are required";
       ok = false;
       break;
@@ -546,10 +600,14 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
     return false;
   }
   imported = header;
+  LOG_DBG(MODULE, "Import complete: path=%s cards=%lu text_bytes=%lu", sourcePath,
+          static_cast<unsigned long>(header.cardCount), static_cast<unsigned long>(header.textBytes));
+  perf.markSuccess();
   return true;
 }
 
 bool ensureImported(const char* sourcePath, const uint64_t key, CacheHeader& header, std::string& error) {
+  PerfTrace perf("ensure_imported");
   uint64_t sourceSize = 0;
   uint16_t fatDate = 0;
   uint16_t fatTime = 0;
@@ -561,10 +619,15 @@ bool ensureImported(const char* sourcePath, const uint64_t key, CacheHeader& hea
   makeCachePath(key, cachePath, sizeof(cachePath));
   if (readCacheHeader(cachePath, header) && header.sourceSize == sourceSize && header.fatDate == fatDate &&
       header.fatTime == fatTime) {
+    LOG_DBG(MODULE, "Cache hit: path=%s cards=%lu bytes=%llu", sourcePath, static_cast<unsigned long>(header.cardCount),
+            static_cast<unsigned long long>(sourceSize));
+    perf.markSuccess();
     return true;
   }
-  LOG_INF(MODULE, "Importing %s", sourcePath);
-  return importDeck(sourcePath, key, sourceSize, fatDate, fatTime, header, error);
+  LOG_INF(MODULE, "Cache miss; importing %s", sourcePath);
+  if (!importDeck(sourcePath, key, sourceSize, fatDate, fatTime, header, error)) return false;
+  perf.markSuccess();
+  return true;
 }
 
 char* trim(char* value) {
@@ -595,14 +658,14 @@ bool parseFloat(const char* value, float& output) {
 }
 
 StudyCard* findCard(std::vector<StudyCard>& cards, const Fingerprint& fingerprint) {
-  const auto position = std::lower_bound(cards.begin(), cards.end(), fingerprint,
-                                         [](const StudyCard& card, const Fingerprint& value) {
-                                           return card.fingerprint < value;
-                                         });
+  const auto position =
+      std::lower_bound(cards.begin(), cards.end(), fingerprint,
+                       [](const StudyCard& card, const Fingerprint& value) { return card.fingerprint < value; });
   return position != cards.end() && position->fingerprint == fingerprint ? &*position : nullptr;
 }
 
 bool appendHistory(const uint64_t key, const HistoryEvent& event, std::string& error) {
+  PerfTrace perf("append_history");
   char path[96];
   makeHistoryPath(key, path, sizeof(path));
   HalFile history;
@@ -618,13 +681,19 @@ bool appendHistory(const uint64_t key, const HistoryEvent& event, std::string& e
     return false;
   }
   history.flush();
+  perf.markSuccess();
   return true;
 }
 
 bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, std::string& error) {
+  PerfTrace perf("replay_history");
   char path[96];
   makeHistoryPath(key, path, sizeof(path));
-  if (!Storage.exists(path)) return true;
+  if (!Storage.exists(path)) {
+    LOG_DBG(MODULE, "No review history: deck=%016llx", static_cast<unsigned long long>(key));
+    perf.markSuccess();
+    return true;
+  }
 
   HalFile history;
   if (!Storage.openFileForRead(MODULE, path, history)) {
@@ -634,6 +703,7 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
   serialization::BufferedFileReader reader(history, IO_BUFFER_BYTES);
   uint8_t data[HISTORY_RECORD_SIZE];
   size_t validBytes = 0;
+  uint32_t recordCount = 0;
   bool damagedTail = false;
   while (reader.read(data, sizeof(data)) == sizeof(data)) {
     HistoryEvent event;
@@ -642,8 +712,8 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
       break;
     }
     validBytes += sizeof(data);
-    if (event.type == HistoryType::Introduction && event.introducedDay == today &&
-        queue.introducedToday < UINT16_MAX) {
+    ++recordCount;
+    if (event.type == HistoryType::Introduction && event.introducedDay == today && queue.introducedToday < UINT16_MAX) {
       ++queue.introducedToday;
     }
     StudyCard* card = findCard(queue.cards, event.fingerprint);
@@ -657,7 +727,12 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
     }
   }
   if (validBytes != history.fileSize64()) damagedTail = true;
-  if (!damagedTail) return true;
+  if (!damagedTail) {
+    LOG_DBG(MODULE, "History replayed: deck=%016llx records=%lu bytes=%u", static_cast<unsigned long long>(key),
+            static_cast<unsigned long>(recordCount), static_cast<unsigned>(validBytes));
+    perf.markSuccess();
+    return true;
+  }
 
   LOG_ERR(MODULE, "Discarding damaged history tail at %u", static_cast<unsigned>(validBytes));
   history.close();
@@ -666,10 +741,14 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
     error = "Review history is damaged and could not be repaired";
     return false;
   }
+  LOG_DBG(MODULE, "History repaired: deck=%016llx records=%lu bytes=%u", static_cast<unsigned long long>(key),
+          static_cast<unsigned long>(recordCount), static_cast<unsigned>(validBytes));
+  perf.markSuccess();
   return true;
 }
 
 bool loadCards(const char* path, const CacheHeader& header, StudyQueue& queue, std::string& error) {
+  PerfTrace perf("load_cards");
   if (!validateCachePayload(path, header)) {
     error = "Deck cache is damaged; reopen the deck to reimport it";
     return false;
@@ -700,6 +779,9 @@ bool loadCards(const char* path, const CacheHeader& header, StudyQueue& queue, s
   }
   std::sort(queue.cards.begin(), queue.cards.end(),
             [](const StudyCard& left, const StudyCard& right) { return left.fingerprint < right.fingerprint; });
+  LOG_DBG(MODULE, "Cards loaded: count=%u metadata_bytes=%u", static_cast<unsigned>(queue.cards.size()),
+          static_cast<unsigned>(queue.cards.size() * sizeof(StudyCard)));
+  perf.markSuccess();
   return true;
 }
 
@@ -724,9 +806,16 @@ Fingerprint FlashcardStore::fingerprint(const std::string& front, const std::str
 }
 
 bool FlashcardStore::loadConfig(Config& config, std::string& error) {
+  PerfTrace perf("load_config");
   config = Config{};
   error.clear();
-  if (!Storage.exists(CONFIG_PATH)) return true;
+  if (!Storage.exists(CONFIG_PATH)) {
+    LOG_DBG(MODULE, "Config not found; using defaults: new=%u retention=%.2f max_interval=%lu",
+            static_cast<unsigned>(config.newCardsPerDay), static_cast<double>(config.desiredRetention),
+            static_cast<unsigned long>(config.maximumIntervalDays));
+    perf.markSuccess();
+    return true;
+  }
 
   HalFile file;
   if (!Storage.openFileForRead(MODULE, CONFIG_PATH, file)) {
@@ -781,10 +870,15 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
     if (value < 0) break;
     if (value == '\n') ++lineNumber;
   }
+  LOG_DBG(MODULE, "Config loaded: new=%u retention=%.2f max_interval=%lu", static_cast<unsigned>(config.newCardsPerDay),
+          static_cast<double>(config.desiredRetention), static_cast<unsigned long>(config.maximumIntervalDays));
+  perf.markSuccess();
   return true;
 }
 
 bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks) {
+  PerfTrace perf("scan_decks");
+  LOG_DBG(MODULE, "Deck scan started: directory=%s", SOURCE_DIRECTORY);
   decks.clear();
   decks.reserve(MAX_DECKS);
   if (!Storage.exists(SOURCE_DIRECTORY) && !Storage.mkdir(SOURCE_DIRECTORY, true)) {
@@ -810,23 +904,32 @@ bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks) {
     deck.key = deckKey(fileName);
     CacheHeader header;
     if (ensureImported(deck.sourcePath.c_str(), deck.key, header, deck.error)) deck.cardCount = header.cardCount;
+    LOG_DBG(MODULE, "Deck found: name=%s status=%s cards=%lu", deck.name.c_str(), deck.valid() ? "ready" : "invalid",
+            static_cast<unsigned long>(deck.cardCount));
     decks.push_back(std::move(deck));
   }
-  std::sort(decks.begin(), decks.end(), [](const DeckSummary& left, const DeckSummary& right) {
-    return left.name < right.name;
-  });
+  std::sort(decks.begin(), decks.end(),
+            [](const DeckSummary& left, const DeckSummary& right) { return left.name < right.name; });
+  LOG_DBG(MODULE, "Deck scan complete: decks=%u", static_cast<unsigned>(decks.size()));
+  perf.markSuccess();
   return true;
 }
 
-bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, const Config& config,
-                                    StudyQueue& queue, std::string& error) {
-  queue = StudyQueue{};
+bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, const Config& config, StudyQueue& queue,
+                                    std::string& error) {
+  PerfTrace perf("load_study_queue");
+  LOG_DBG(MODULE, "Queue load started: deck=%s now=%lld", deck.name.c_str(), static_cast<long long>(now));
+  queue.cards.clear();
+  queue.dueCards.clear();
+  queue.newCards.clear();
+  queue.introducedToday = 0;
   error.clear();
   CacheHeader header;
   if (!ensureImported(deck.sourcePath.c_str(), deck.key, header, error)) return false;
   char cachePath[96];
   makeCachePath(deck.key, cachePath, sizeof(cachePath));
   if (!loadCards(cachePath, header, queue, error)) {
+    LOG_DBG(MODULE, "Cache load failed; rebuilding: deck=%s", deck.name.c_str());
     Storage.remove(cachePath);
     CacheHeader rebuilt;
     if (!ensureImported(deck.sourcePath.c_str(), deck.key, rebuilt, error) ||
@@ -837,47 +940,18 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
 
   const int32_t today = static_cast<int32_t>(now / 86400);
   if (!replayHistory(deck.key, today, queue, error)) return false;
-  queue.dueCards.reserve(queue.cards.size());
-  queue.newCards.reserve(queue.cards.size());
-
-  std::vector<uint16_t> unseen;
-  unseen.reserve(queue.cards.size());
-  for (uint16_t i = 0; i < queue.cards.size(); ++i) {
-    const StudyCard& card = queue.cards[i];
-    if (card.initialized) {
-      if (card.due <= now) queue.dueCards.push_back(i);
-    } else if (card.introducedDay == today) {
-      queue.newCards.push_back(i);
-    } else if (card.introducedDay >= 0) {
-      queue.dueCards.push_back(i);
-    } else {
-      unseen.push_back(i);
-    }
-  }
-
-  const uint16_t remaining = queue.introducedToday >= config.newCardsPerDay
-                                 ? 0
-                                 : static_cast<uint16_t>(config.newCardsPerDay - queue.introducedToday);
-  std::sort(unseen.begin(), unseen.end(), [&](const uint16_t left, const uint16_t right) {
-    return queue.cards[left].sourceOrder < queue.cards[right].sourceOrder;
-  });
-  for (size_t i = 0; i < std::min<size_t>(remaining, unseen.size()); ++i) queue.newCards.push_back(unseen[i]);
-
-  std::sort(queue.dueCards.begin(), queue.dueCards.end(), [&](const uint16_t left, const uint16_t right) {
-    const StudyCard& a = queue.cards[left];
-    const StudyCard& b = queue.cards[right];
-    const int64_t aDue = a.initialized ? a.due : 0;
-    const int64_t bDue = b.initialized ? b.due : 0;
-    return aDue != bDue ? aDue < bDue : a.sourceOrder < b.sourceOrder;
-  });
-  std::sort(queue.newCards.begin(), queue.newCards.end(), [&](const uint16_t left, const uint16_t right) {
-    return queue.cards[left].sourceOrder < queue.cards[right].sourceOrder;
-  });
+  detail::buildStudyQueues(queue.cards, now, today, queue.introducedToday, config.newCardsPerDay, queue.dueCards,
+                           queue.newCards);
+  LOG_DBG(MODULE, "Queue ready: deck=%s cards=%u due=%u new=%u introduced_today=%u", deck.name.c_str(),
+          static_cast<unsigned>(queue.cards.size()), static_cast<unsigned>(queue.dueCards.size()),
+          static_cast<unsigned>(queue.newCards.size()), static_cast<unsigned>(queue.introducedToday));
+  perf.markSuccess();
   return true;
 }
 
-bool FlashcardStore::readCardText(const DeckSummary& deck, const StudyCard& card, const bool back,
-                                  std::string& text, std::string& error) {
+bool FlashcardStore::readCardText(const DeckSummary& deck, const StudyCard& card, const bool back, std::string& text,
+                                  std::string& error) {
+  PerfTrace perf(back ? "read_back" : "read_front");
   char path[96];
   makeCachePath(deck.key, path, sizeof(path));
   CacheHeader header;
@@ -902,41 +976,51 @@ bool FlashcardStore::readCardText(const DeckSummary& deck, const StudyCard& card
     error = "Could not read card text";
     return false;
   }
+  LOG_DBG(MODULE, "Card text loaded: deck=%s side=%s bytes=%lu", deck.name.c_str(), back ? "back" : "front",
+          static_cast<unsigned long>(length));
+  perf.markSuccess();
   return true;
 }
 
-bool FlashcardStore::introduceCard(const DeckSummary& deck, StudyCard& card, const int64_t now,
-                                   std::string& error) {
+bool FlashcardStore::introduceCard(const DeckSummary& deck, StudyCard& card, const int64_t now, std::string& error) {
   if (card.introducedDay >= 0) return true;
   const int32_t today = static_cast<int32_t>(now / 86400);
   const HistoryEvent event{HistoryType::Introduction, Rating::Again, card.fingerprint, card.memory, now, now, today};
   if (!appendHistory(deck.key, event, error)) return false;
   card.introducedDay = today;
+  LOG_DBG(MODULE, "Card introduced: deck=%s source_order=%lu day=%ld", deck.name.c_str(),
+          static_cast<unsigned long>(card.sourceOrder), static_cast<long>(today));
   return true;
 }
 
 bool FlashcardStore::reviewCard(const DeckSummary& deck, StudyCard& card, const int64_t now, const Rating rating,
                                 const Config& config, std::string& error) {
+  PerfTrace perf("review_card");
   if (card.introducedDay < 0 && !introduceCard(deck, card, now, error)) return false;
-  const uint32_t elapsedDays = card.initialized && now > card.lastReview
-                                   ? static_cast<uint32_t>((now - card.lastReview) / 86400)
-                                   : 0;
+  const uint32_t elapsedDays =
+      card.initialized && now > card.lastReview ? static_cast<uint32_t>((now - card.lastReview) / 86400) : 0;
   SchedulingResult result;
   const MemoryState* current = card.initialized ? &card.memory : nullptr;
-  if (!FsrsScheduler::next(current, elapsedDays, rating, config.desiredRetention, config.maximumIntervalDays,
-                           result)) {
+  if (!FsrsScheduler::next(current, elapsedDays, rating, config.desiredRetention, config.maximumIntervalDays, result)) {
     LOG_ERR(MODULE, "FSRS rejected card state");
     error = "Could not schedule card";
     return false;
   }
   const int64_t due = rating == Rating::Again ? now : now + static_cast<int64_t>(result.intervalDays) * 86400;
-  const HistoryEvent event{HistoryType::Review, rating, card.fingerprint, result.memory, now, due,
-                           card.introducedDay};
+  const HistoryEvent event{HistoryType::Review, rating, card.fingerprint, result.memory, now, due, card.introducedDay};
   if (!appendHistory(deck.key, event, error)) return false;
   card.memory = result.memory;
   card.lastReview = now;
   card.due = due;
   card.initialized = true;
+  LOG_DBG(MODULE,
+          "Card reviewed: deck=%s source_order=%lu rating=%s elapsed_days=%lu interval_days=%lu due=%lld "
+          "stability=%.4f difficulty=%.4f",
+          deck.name.c_str(), static_cast<unsigned long>(card.sourceOrder), rating == Rating::Again ? "again" : "good",
+          static_cast<unsigned long>(elapsedDays), static_cast<unsigned long>(result.intervalDays),
+          static_cast<long long>(due), static_cast<double>(result.memory.stability),
+          static_cast<double>(result.memory.difficulty));
+  perf.markSuccess();
   return true;
 }
 
