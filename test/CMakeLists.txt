@@ -70,6 +70,7 @@ add_subdirectory(button_press_navigation)
 add_subdirectory(inflate_stream)
 add_subdirectory(fs_helpers)
 add_subdirectory(txt_to_html)
+add_subdirectory(flashcards)
 
 add_subdirectory(absolute_grayscale)
 

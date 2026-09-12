@@ -32,6 +32,8 @@ Check [our Devices page](https://crosspointreader.com/devices) for the full list
 
 - **Library workflow**: indexed title/author search, recently-added and alphabetical views, multilingual grouping, folder browser, recent books, and SD-cache management.
 
+- **Flashcards (X4 Pro)**: CSV decks, persistent review history, daily new-card limits, and FSRS-6 scheduling. See [the flashcard guide](docs/flashcards.md).
+
 - **Wireless workflows**:
   
   - File transfer web UI

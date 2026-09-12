@@ -7,6 +7,26 @@
 
 HalClock halClock;  // Singleton instance
 
+namespace {
+constexpr bool isLeapYear(const int year) { return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0); }
+
+constexpr uint8_t daysInMonth(const int year, const uint8_t month) {
+  constexpr uint8_t DAYS[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  return month == 2 && isLeapYear(year) ? 29 : DAYS[month - 1];
+}
+
+// Howard Hinnant's civil-calendar conversion, with 1970-01-01 as day zero.
+constexpr int64_t daysFromCivil(int year, const uint8_t month, const uint8_t day) {
+  year -= month <= 2;
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+  const unsigned shiftedMonth = static_cast<unsigned>(month + (month > 2 ? -3 : 9));
+  const unsigned dayOfYear = (153 * shiftedMonth + 2) / 5 + day - 1;
+  const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(dayOfEra) - 719468;
+}
+}  // namespace
+
 void HalClock::begin() {
   _available = _sdkRtc.begin();
   LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
@@ -49,6 +69,20 @@ bool HalClock::localTime(struct tm& out) const {
     _lastPollMs = now != 0 ? now : 1;  // 0 doubles as the invalidation sentinel
   }
   localtime_r(&_cachedUtc, &out);
+  return true;
+}
+
+bool HalClock::getUnixTime(int64_t& timestamp) const {
+  if (!_available) return false;
+
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt) || dt.year < 1970 || dt.month < 1 || dt.month > 12 || dt.day < 1 ||
+      dt.day > daysInMonth(dt.year, dt.month) || dt.hour > 23 || dt.minute > 59 || dt.second > 59) {
+    return false;
+  }
+
+  timestamp = daysFromCivil(dt.year, dt.month, dt.day) * 86400 + static_cast<int64_t>(dt.hour) * 3600 +
+              static_cast<int64_t>(dt.minute) * 60 + dt.second;
   return true;
 }
 
