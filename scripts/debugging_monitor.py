@@ -13,6 +13,7 @@ Features:
 - Screenshot capture and processing (1-bit black/white format)
 - Graceful shutdown handling with Ctrl-C signal processing
 - Configurable filtering and suppression of log messages
+- Optional plain-text capture with device and host timestamps
 - Thread-safe operation with coordinated shutdown events
 
 Usage:
@@ -65,6 +66,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="",
         help="Suppress lines containing this keyword (case-insensitive)",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default="",
+        help="Write all serial lines to a plain-text file before display filtering",
     )
     return parser
 
@@ -236,15 +243,25 @@ def parse_memory_line(line: str) -> tuple[int | None, int | None, int | None]:
     )
 
 
-def serial_worker(ser, kwargs: dict[str, str]) -> None:
+def serial_worker(ser, kwargs: dict[str, object]) -> None:
     """
     Runs in a background thread. Handles reading serial data, printing to console,
     updating memory usage data for graphing, and processing screenshot data.
     Monitors the global shutdown event for graceful termination.
     """
     print(f"{Fore.CYAN}--- Opening serial port ---{Style.RESET_ALL}")
-    filter_keyword = kwargs.get("filter", "").lower()
-    suppress = kwargs.get("suppress", "").lower()
+    filter_keyword = str(kwargs.get("filter", "")).lower()
+    suppress = str(kwargs.get("suppress", "")).lower()
+    log_path = str(kwargs.get("log_file", ""))
+    log_output = None
+    if log_path:
+        try:
+            log_output = open(log_path, "a", encoding="utf-8", buffering=1)
+            print(f"{Fore.CYAN}Capturing all serial output in: {log_path}{Style.RESET_ALL}")
+        except OSError as error:
+            print(f"{Fore.RED}Could not open log file {log_path}: {error}{Style.RESET_ALL}")
+            shutdown_event.set()
+            return
     if filter_keyword and suppress and filter_keyword == suppress:
         print(
             f"{Fore.YELLOW}Warning: Filter and Suppress keywords are the same. "
@@ -306,8 +323,11 @@ def serial_worker(ser, kwargs: dict[str, str]) -> None:
                     elif clean_line == "SCREENSHOT_END":
                         continue  # ignore
 
-                    # Add PC timestamp
-                    pc_time = datetime.now().strftime("%H:%M:%S")
+                    # Keep the device timestamp in captures while using a compact host timestamp on screen.
+                    captured_at = datetime.now()
+                    pc_time = captured_at.strftime("%H:%M:%S")
+                    if log_output:
+                        log_output.write(f"{captured_at.isoformat(timespec='milliseconds')} {clean_line}\n")
                     formatted_line = re.sub(r"^\[\d+\]", f"[{pc_time}]", clean_line)
 
                     # Check for Memory Line
@@ -343,7 +363,8 @@ def serial_worker(ser, kwargs: dict[str, str]) -> None:
         # If thread is killed violently (e.g. main exit), silence errors
         pass
     finally:
-        pass  # ser closed in main
+        if log_output:
+            log_output.close()  # ser is closed in main
 
 
 def input_worker(ser) -> None:

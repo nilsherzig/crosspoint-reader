@@ -41,6 +41,7 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   bool loadCurrentCard();
   void showError(ErrorKind kind, const std::string& detail);
   std::vector<uint16_t>& currentPhaseQueue();
+  const char* phaseName() const;
   const char* errorText() const;
 
   flashcards::DeckSummary deck;
