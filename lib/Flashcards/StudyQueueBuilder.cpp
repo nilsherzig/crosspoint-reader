@@ -5,9 +5,10 @@
 
 namespace flashcards::detail {
 
-void buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, const int32_t today,
-                      const uint16_t introducedToday, const uint16_t newCardsPerDay,
-                      std::vector<uint16_t>& dueCards, std::vector<uint16_t>& newCards) {
+uint16_t buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, const int32_t today,
+                          const uint16_t introducedToday, const uint16_t newCardsPerDay,
+                          const uint16_t additionalNewCards, std::vector<uint16_t>& dueCards,
+                          std::vector<uint16_t>& newCards) {
   dueCards.clear();
   newCards.clear();
   dueCards.reserve(cards.size());
@@ -24,17 +25,18 @@ void buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, co
     }
   }
 
-  const uint16_t remaining =
-      introducedToday >= newCardsPerDay ? 0 : static_cast<uint16_t>(newCardsPerDay - introducedToday);
+  const size_t remainingFromDailyLimit =
+      introducedToday >= newCardsPerDay ? 0 : static_cast<size_t>(newCardsPerDay - introducedToday);
   const size_t introducedActive = newCards.size();
   for (uint16_t i = 0; i < cards.size(); ++i) {
     if (!cards[i].initialized && cards[i].introducedDay < 0) newCards.push_back(i);
   }
-  std::sort(newCards.begin() + static_cast<ptrdiff_t>(introducedActive), newCards.end(),
-            [&](const uint16_t left, const uint16_t right) {
-              return cards[left].sourceOrder < cards[right].sourceOrder;
-            });
-  newCards.resize(introducedActive + std::min<size_t>(remaining, newCards.size() - introducedActive));
+  const size_t unseenCount = newCards.size() - introducedActive;
+  std::sort(
+      newCards.begin() + static_cast<ptrdiff_t>(introducedActive), newCards.end(),
+      [&](const uint16_t left, const uint16_t right) { return cards[left].sourceOrder < cards[right].sourceOrder; });
+  const size_t selectedUnseen = std::min(unseenCount, remainingFromDailyLimit + additionalNewCards);
+  newCards.resize(introducedActive + selectedUnseen);
 
   std::sort(dueCards.begin(), dueCards.end(), [&](const uint16_t left, const uint16_t right) {
     const StudyCard& a = cards[left];
@@ -43,8 +45,10 @@ void buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, co
     const int64_t bDue = b.initialized ? b.due : 0;
     return aDue != bDue ? aDue < bDue : a.sourceOrder < b.sourceOrder;
   });
-  std::sort(newCards.begin(), newCards.end(),
-            [&](const uint16_t left, const uint16_t right) { return cards[left].sourceOrder < cards[right].sourceOrder; });
+  std::sort(newCards.begin(), newCards.end(), [&](const uint16_t left, const uint16_t right) {
+    return cards[left].sourceOrder < cards[right].sourceOrder;
+  });
+  return static_cast<uint16_t>(unseenCount);
 }
 
 }  // namespace flashcards::detail

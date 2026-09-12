@@ -23,9 +23,15 @@ class FlashcardDeckListActivity final : public UiListActivity {
   void activateIndex(int index) override;
 
  private:
+  void openReview(size_t index, uint16_t additionalNewCards);
+  void refreshDeckCounts(size_t index);
+  void updateSubtitle(size_t index);
+
   std::vector<flashcards::DeckSummary> decks;
   std::vector<std::string> subtitles;
   std::vector<freeink::ui::ListItem> listItems;
+  flashcards::Config config;
+  bool countsReady = false;
 };
 
 #endif

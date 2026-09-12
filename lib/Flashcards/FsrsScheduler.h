@@ -13,6 +13,7 @@ struct MemoryState {
 
 struct SchedulingResult {
   MemoryState memory;
+  float intervalDaysExact = 1.0f;
   uint32_t intervalDays = 1;
 };
 
