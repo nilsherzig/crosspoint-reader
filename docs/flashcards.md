@@ -32,22 +32,28 @@ Limits chosen to bound RAM use are:
 new_cards_per_day = 20
 desired_retention = 0.90
 maximum_interval_days = 36500
+learning_steps_minutes = [1, 10]
+relearning_steps_minutes = [10]
 ```
 
-This is intentionally a small TOML subset: blank lines, `#` comments, and the three scalar keys above are supported. Unknown keys, unsupported TOML syntax, and out-of-range values block studying until corrected. Valid ranges are 0–1,000 new cards, 0.70–0.99 retention, and 1–365,000 days.
+This is intentionally a small TOML subset: blank lines, `#` comments, the three scalar keys, and the two integer arrays above are supported. Unknown keys, unsupported TOML syntax, and out-of-range values block studying until corrected. Valid ranges are 0–1,000 new cards, 0.70–0.99 retention, and 1–365,000 days. Each learning-step array must contain 1–8 strictly increasing whole-minute values between 1 and 10,080.
 
-The new-card limit applies independently to each deck and UTC calendar day. A new card consumes quota when it is first displayed, not when a session is opened or when the card is first rated. Due cards are never limited.
+The new-card limit applies independently to each deck and UTC calendar day. A new card consumes quota when it is first displayed, not when a session is opened or when the card is first rated. Due cards are never limited. When a selected deck has no due or available new cards but still has unseen cards, a numeric picker can add a one-session allowance of 1–2,000 cards. Only cards actually displayed consume that allowance; the configured daily limit is not changed.
 
 ## Scheduling and sessions
 
-The scheduler is a scalar C++ port of the FSRS-6 scheduling equations using the 21 default parameters from `fsrs-rs` 5.2.0. Only `Again` (FSRS rating 1) and `Good` (rating 3) are exposed. Parameter optimization, training, and interval fuzzing are intentionally omitted.
+The scheduler is a scalar C++ port of the FSRS-6 scheduling equations using the 21 default parameters from `fsrs-rs` 5.2.0. Only `Again` (FSRS rating 1) and `Good` (rating 3) are exposed. Parameter optimization and training are intentionally omitted.
+
+New cards move through the configured learning steps: `Again` resets to the first step, while `Good` advances to the next step and graduates from the last step into normal FSRS review. An `Again` on a graduated review card applies the FSRS lapse update and enters the configured relearning steps with the same reset/advance behavior. Step delays use exact UTC timestamps, remain persisted across sessions, and receive a deterministic increase of up to 25%, capped at five minutes.
+
+Graduated FSRS intervals use deterministic per-card/per-review fuzzing. Intervals below 2.5 days are only rounded; longer intervals use the standard progressively narrowing bands (15% through day 7, 10% through day 20, and 5% thereafter) while respecting the configured maximum. The selected due timestamp is persisted, so replay does not depend on regenerating the random choice.
 
 A session has strict phases:
 
 1. all due cards, ordered by due timestamp and then CSV order;
 2. today's introduced and selected new cards, in CSV order.
 
-`Again` updates FSRS immediately, sets the due timestamp to now, and appends the card to the end of its current phase. A later same-session rating therefore has zero elapsed days and takes the FSRS short-term path. `Good` schedules at least one day ahead. The new phase cannot start while an `Again` repeat remains in the due phase.
+Learning and relearning cards become eligible at their timestamp and take priority once due. Other due and new cards continue while a step delay is running. If no other card remains, the session displays the time until the next learning card and automatically resumes when it becomes due; the user may leave and return later. A later same-day rating uses `elapsedDays = 0` and therefore takes the FSRS short-term path. A graduated `Good` schedules at least one day ahead.
 
 The hardware RTC must have been synchronized before studying. Deck browsing and import still work without a valid clock. Day boundaries and due timestamps use UTC so timezone-setting changes do not alter scheduling. When the clock and configuration are valid, each deck row shows its total, due, and currently available new-card counts; otherwise it shows only the total.
 
@@ -61,13 +67,13 @@ A card identity is a deterministic 128-bit fingerprint over the exact decoded fr
 
 A deck identity is a deterministic case-folded 64-bit hash of the CSV filename. Renaming a deck, except for changing ASCII letter case, therefore creates a separate deck identity and does not automatically migrate history.
 
-Every introduction and review is appended to the deck's `.history` journal. Every review record contains the card fingerprint, UTC timestamp, rating, resulting FSRS memory state, and due timestamp. Removed cards' records are retained. Each fixed-size record has a CRC-32; an incomplete or damaged tail is truncated to the last valid record before new reviews are appended.
+Every introduction and review is appended to the deck's `.history` journal. Every review record contains the card fingerprint, UTC timestamp, rating, resulting FSRS memory state, learning/relearning phase, step, and due timestamp. Removed cards' records are retained. Each fixed-size record has a CRC-32; an incomplete or damaged tail is truncated to the last valid record before new reviews are appended. Version 1 history records remain readable and are treated as graduated reviews.
 
 ## Memory model
 
 CSV import is streaming. It keeps the current row, an 8 KiB Bloom filter, and small buffered-I/O blocks in memory; card records and decoded text go to separate temporary SD files before the final cache is assembled. Bloom-filter hits are verified against the temporary records, so the filter cannot reject a unique card by itself.
 
-Studying loads fixed-size metadata and 16-bit queue indexes for only the selected deck, while front and back text are fetched one card at a time. The vectors are pre-reserved and bounded by the 2,000-card limit. The deck overview reuses one bounded queue allocation while calculating counts sequentially, then releases it before rendering. A process-lifetime static pool was rejected because it would permanently reserve the worst-case size even outside the app; the selected-deck allocations are released in `onExit()`.
+Studying loads fixed-size metadata and 16-bit queue indexes for only the selected deck, while front and back text are fetched one card at a time. The vectors are pre-reserved and bounded by the 2,000-card limit. A transient 16-bit pending-step queue adds at most 4 KiB and allows delayed learning cards to re-enter the same session without repeated heap growth. The deck overview reuses one bounded queue allocation while calculating counts sequentially, then releases it before rendering. A process-lifetime static pool was rejected because it would permanently reserve the worst-case size even outside the app; the selected-deck allocations are released in `onExit()`.
 
 ## Performance diagnostics
 
@@ -99,10 +105,11 @@ The following implementation choices were not inherent in the original product r
 - empty front or back fields are rejected;
 - due ties and new cards follow CSV order;
 - quota is consumed on first display and uses UTC day boundaries;
+- learning steps use strictly increasing whole minutes, with 1–8 steps capped at seven days each;
 - malformed config blocks all study sessions rather than falling back per invalid key;
 - card/deck/row limits are fixed safety bounds;
 - cache invalidation uses FAT timestamp plus size, so an edit preserving both can require touching the file or deleting `/.crosspoint/flashcards/`;
 - cards are plain text; HTML, Markdown, images, tags, hints, and reverse cards are not interpreted;
-- only the fixed FSRS-6 defaults, deterministic intervals without fuzzing, `Again`, and `Good` are supported;
+- only the fixed FSRS-6 weights and the `Again`/`Good` ratings are supported; fuzzing and learning-step delays are deterministic from card identity and review time;
 - review history is never compacted so it remains available for a future optimizer;
 - no settings UI or per-deck configuration is provided yet.

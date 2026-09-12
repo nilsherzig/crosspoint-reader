@@ -16,6 +16,7 @@
 #include <limits>
 
 #include "CsvReader.h"
+#include "FlashcardConfigParser.h"
 #include "StudyQueueBuilder.h"
 
 namespace flashcards {
@@ -28,7 +29,8 @@ constexpr uint16_t CACHE_VERSION = 1;
 constexpr size_t CACHE_HEADER_SIZE = 36;
 constexpr size_t CACHE_RECORD_SIZE = 36;
 constexpr uint32_t HISTORY_MAGIC = 0x31484346;  // FCH1
-constexpr uint16_t HISTORY_VERSION = 1;
+constexpr uint16_t LEGACY_HISTORY_VERSION = 1;
+constexpr uint16_t HISTORY_VERSION = 2;
 constexpr size_t HISTORY_RECORD_SIZE = 60;
 constexpr size_t BLOOM_BYTES = 8192;
 constexpr size_t IO_BUFFER_BYTES = 1024;
@@ -97,6 +99,8 @@ enum class HistoryType : uint8_t { Introduction = 1, Review = 2 };
 struct HistoryEvent {
   HistoryType type = HistoryType::Introduction;
   Rating rating = Rating::Again;
+  CardPhase phase = CardPhase::New;
+  uint8_t learningStep = 0;
   Fingerprint fingerprint;
   MemoryState memory;
   int64_t timestamp = 0;
@@ -219,6 +223,8 @@ void encodeHistoryEvent(const HistoryEvent& event, uint8_t* data) {
   putU16(data + 6, HISTORY_RECORD_SIZE);
   data[8] = static_cast<uint8_t>(event.type);
   data[9] = event.type == HistoryType::Review ? static_cast<uint8_t>(event.rating) : 0;
+  data[10] = static_cast<uint8_t>(event.phase);
+  data[11] = event.learningStep;
   putU64(data + 12, event.fingerprint.first);
   putU64(data + 20, event.fingerprint.second);
   putFloat(data + 28, event.memory.stability);
@@ -230,8 +236,9 @@ void encodeHistoryEvent(const HistoryEvent& event, uint8_t* data) {
 }
 
 bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
-  if (getU32(data) != HISTORY_MAGIC || getU16(data + 4) != HISTORY_VERSION || getU16(data + 6) != HISTORY_RECORD_SIZE ||
-      getU32(data + 56) != crc32(data, 56)) {
+  const uint16_t version = getU16(data + 4);
+  if (getU32(data) != HISTORY_MAGIC || (version != LEGACY_HISTORY_VERSION && version != HISTORY_VERSION) ||
+      getU16(data + 6) != HISTORY_RECORD_SIZE || getU32(data + 56) != crc32(data, 56)) {
     return false;
   }
   event.type = static_cast<HistoryType>(data[8]);
@@ -239,6 +246,19 @@ bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
   if ((event.type != HistoryType::Introduction && event.type != HistoryType::Review) ||
       (event.type == HistoryType::Review && event.rating != Rating::Again && event.rating != Rating::Good)) {
     return false;
+  }
+  if (version == LEGACY_HISTORY_VERSION) {
+    event.phase = event.type == HistoryType::Review ? CardPhase::Review : CardPhase::New;
+    event.learningStep = 0;
+  } else {
+    event.phase = static_cast<CardPhase>(data[10]);
+    event.learningStep = data[11];
+    if (event.phase < CardPhase::New || event.phase > CardPhase::Relearning ||
+        event.learningStep >= MAX_LEARNING_STEPS ||
+        (event.type == HistoryType::Introduction && event.phase != CardPhase::New) ||
+        (event.type == HistoryType::Review && event.phase == CardPhase::New)) {
+      return false;
+    }
   }
   event.fingerprint.first = getU64(data + 12);
   event.fingerprint.second = getU64(data + 20);
@@ -657,6 +677,12 @@ bool parseFloat(const char* value, float& output) {
   return true;
 }
 
+uint64_t schedulingSeed(const StudyCard& card, const int64_t now, const Rating rating) {
+  const uint64_t rotated = (card.fingerprint.second << 23) | (card.fingerprint.second >> 41);
+  return card.fingerprint.first ^ rotated ^ static_cast<uint64_t>(now) ^
+         (static_cast<uint64_t>(rating) * 0x9E3779B97F4A7C15ULL);
+}
+
 StudyCard* findCard(std::vector<StudyCard>& cards, const Fingerprint& fingerprint) {
   const auto position =
       std::lower_bound(cards.begin(), cards.end(), fingerprint,
@@ -723,6 +749,8 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
       card->memory = event.memory;
       card->lastReview = event.timestamp;
       card->due = event.due;
+      card->phase = event.phase;
+      card->learningStep = event.learningStep;
       card->initialized = true;
     }
   }
@@ -810,9 +838,12 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
   config = Config{};
   error.clear();
   if (!Storage.exists(CONFIG_PATH)) {
-    LOG_DBG(MODULE, "Config not found; using defaults: new=%u retention=%.2f max_interval=%lu",
+    LOG_DBG(MODULE,
+            "Config not found; using defaults: new=%u retention=%.2f max_interval=%lu learn_steps=%u "
+            "relearn_steps=%u",
             static_cast<unsigned>(config.newCardsPerDay), static_cast<double>(config.desiredRetention),
-            static_cast<unsigned long>(config.maximumIntervalDays));
+            static_cast<unsigned long>(config.maximumIntervalDays), static_cast<unsigned>(config.learningSteps.count),
+            static_cast<unsigned>(config.relearningSteps.count));
     perf.markSuccess();
     return true;
   }
@@ -860,6 +891,12 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
         } else if (strcmp(key, "maximum_interval_days") == 0 && parseUnsigned(setting, unsignedValue) &&
                    unsignedValue >= 1 && unsignedValue <= 365000) {
           config.maximumIntervalDays = unsignedValue;
+        } else if (strcmp(key, "learning_steps_minutes") == 0 &&
+                   detail::parseLearningSteps(setting, config.learningSteps)) {
+          // Parsed above.
+        } else if (strcmp(key, "relearning_steps_minutes") == 0 &&
+                   detail::parseLearningSteps(setting, config.relearningSteps)) {
+          // Parsed above.
         } else {
           error = "Invalid setting on config.toml line " + std::to_string(lineNumber);
           return false;
@@ -870,8 +907,10 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
     if (value < 0) break;
     if (value == '\n') ++lineNumber;
   }
-  LOG_DBG(MODULE, "Config loaded: new=%u retention=%.2f max_interval=%lu", static_cast<unsigned>(config.newCardsPerDay),
-          static_cast<double>(config.desiredRetention), static_cast<unsigned long>(config.maximumIntervalDays));
+  LOG_DBG(MODULE, "Config loaded: new=%u retention=%.2f max_interval=%lu learn_steps=%u relearn_steps=%u",
+          static_cast<unsigned>(config.newCardsPerDay), static_cast<double>(config.desiredRetention),
+          static_cast<unsigned long>(config.maximumIntervalDays), static_cast<unsigned>(config.learningSteps.count),
+          static_cast<unsigned>(config.relearningSteps.count));
   perf.markSuccess();
   return true;
 }
@@ -916,13 +955,14 @@ bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks) {
 }
 
 bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, const Config& config, StudyQueue& queue,
-                                    std::string& error) {
+                                    std::string& error, const uint16_t additionalNewCards) {
   PerfTrace perf("load_study_queue");
   LOG_DBG(MODULE, "Queue load started: deck=%s now=%lld", deck.name.c_str(), static_cast<long long>(now));
   queue.cards.clear();
   queue.dueCards.clear();
   queue.newCards.clear();
   queue.introducedToday = 0;
+  queue.unseenCount = 0;
   error.clear();
   CacheHeader header;
   if (!ensureImported(deck.sourcePath.c_str(), deck.key, header, error)) return false;
@@ -940,11 +980,12 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
 
   const int32_t today = static_cast<int32_t>(now / 86400);
   if (!replayHistory(deck.key, today, queue, error)) return false;
-  detail::buildStudyQueues(queue.cards, now, today, queue.introducedToday, config.newCardsPerDay, queue.dueCards,
-                           queue.newCards);
-  LOG_DBG(MODULE, "Queue ready: deck=%s cards=%u due=%u new=%u introduced_today=%u", deck.name.c_str(),
-          static_cast<unsigned>(queue.cards.size()), static_cast<unsigned>(queue.dueCards.size()),
-          static_cast<unsigned>(queue.newCards.size()), static_cast<unsigned>(queue.introducedToday));
+  queue.unseenCount = detail::buildStudyQueues(queue.cards, now, today, queue.introducedToday, config.newCardsPerDay,
+                                               additionalNewCards, queue.dueCards, queue.newCards);
+  LOG_DBG(MODULE, "Queue ready: deck=%s cards=%u due=%u new=%u unseen=%u introduced_today=%u extra_new=%u",
+          deck.name.c_str(), static_cast<unsigned>(queue.cards.size()), static_cast<unsigned>(queue.dueCards.size()),
+          static_cast<unsigned>(queue.newCards.size()), static_cast<unsigned>(queue.unseenCount),
+          static_cast<unsigned>(queue.introducedToday), static_cast<unsigned>(additionalNewCards));
   perf.markSuccess();
   return true;
 }
@@ -985,7 +1026,8 @@ bool FlashcardStore::readCardText(const DeckSummary& deck, const StudyCard& card
 bool FlashcardStore::introduceCard(const DeckSummary& deck, StudyCard& card, const int64_t now, std::string& error) {
   if (card.introducedDay >= 0) return true;
   const int32_t today = static_cast<int32_t>(now / 86400);
-  const HistoryEvent event{HistoryType::Introduction, Rating::Again, card.fingerprint, card.memory, now, now, today};
+  const HistoryEvent event{
+      HistoryType::Introduction, Rating::Again, CardPhase::New, 0, card.fingerprint, card.memory, now, now, today};
   if (!appendHistory(deck.key, event, error)) return false;
   card.introducedDay = today;
   LOG_DBG(MODULE, "Card introduced: deck=%s source_order=%lu day=%ld", deck.name.c_str(),
@@ -999,25 +1041,33 @@ bool FlashcardStore::reviewCard(const DeckSummary& deck, StudyCard& card, const 
   if (card.introducedDay < 0 && !introduceCard(deck, card, now, error)) return false;
   const uint32_t elapsedDays =
       card.initialized && now > card.lastReview ? static_cast<uint32_t>((now - card.lastReview) / 86400) : 0;
-  SchedulingResult result;
-  const MemoryState* current = card.initialized ? &card.memory : nullptr;
-  if (!FsrsScheduler::next(current, elapsedDays, rating, config.desiredRetention, config.maximumIntervalDays, result)) {
-    LOG_ERR(MODULE, "FSRS rejected card state");
+  const CardSchedulingState state{card.memory, card.phase, card.learningStep, elapsedDays, card.initialized};
+  const CardSchedulingOptions options{config.desiredRetention, config.maximumIntervalDays, &config.learningSteps,
+                                      &config.relearningSteps};
+  CardSchedulingResult result;
+  if (!CardScheduler::next(state, rating, options, schedulingSeed(card, now, rating), result)) {
+    LOG_ERR(MODULE, "Scheduler rejected card state");
     error = "Could not schedule card";
     return false;
   }
-  const int64_t due = rating == Rating::Again ? now : now + static_cast<int64_t>(result.intervalDays) * 86400;
-  const HistoryEvent event{HistoryType::Review, rating, card.fingerprint, result.memory, now, due, card.introducedDay};
+  const int64_t due = result.learningDelaySeconds > 0 ? now + result.learningDelaySeconds
+                                                      : now + static_cast<int64_t>(result.intervalDays) * 86400;
+  const HistoryEvent event{HistoryType::Review, rating, result.phase, result.learningStep, card.fingerprint,
+                           result.memory,       now,    due,          card.introducedDay};
   if (!appendHistory(deck.key, event, error)) return false;
   card.memory = result.memory;
   card.lastReview = now;
   card.due = due;
+  card.phase = result.phase;
+  card.learningStep = result.learningStep;
   card.initialized = true;
   LOG_DBG(MODULE,
-          "Card reviewed: deck=%s source_order=%lu rating=%s elapsed_days=%lu interval_days=%lu due=%lld "
-          "stability=%.4f difficulty=%.4f",
-          deck.name.c_str(), static_cast<unsigned long>(card.sourceOrder), rating == Rating::Again ? "again" : "good",
-          static_cast<unsigned long>(elapsedDays), static_cast<unsigned long>(result.intervalDays),
+          "Card reviewed: deck=%016llx card=%lu rating=%s phase=%u step=%u elapsed=%lu interval=%lu delay=%lu "
+          "due=%lld stability=%.4f difficulty=%.4f",
+          static_cast<unsigned long long>(deck.key), static_cast<unsigned long>(card.sourceOrder),
+          rating == Rating::Again ? "again" : "good", static_cast<unsigned>(result.phase),
+          static_cast<unsigned>(result.learningStep), static_cast<unsigned long>(elapsedDays),
+          static_cast<unsigned long>(result.intervalDays), static_cast<unsigned long>(result.learningDelaySeconds),
           static_cast<long long>(due), static_cast<double>(result.memory.stability),
           static_cast<double>(result.memory.difficulty));
   perf.markSuccess();

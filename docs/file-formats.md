@@ -489,4 +489,4 @@ truncation guard: a build cut short by a power failure cannot pass.
 
 ## Flashcard caches
 
-Flashcard cache and history formats are implemented in `lib/Flashcards/FlashcardStore.cpp` and described, together with their invalidation and recovery behavior, in [flashcards.md](flashcards.md). Both formats currently use version **1** and explicit little-endian fields rather than serialized C++ structs.
+Flashcard cache and history formats are implemented in `lib/Flashcards/FlashcardStore.cpp` and described, together with their invalidation and recovery behavior, in [flashcards.md](flashcards.md). Card caches use version **1**. History records use version **2**, with version **1** retained as a readable legacy format; version 2 stores the resulting learning/relearning phase and step in the two formerly reserved bytes. Both formats use explicit little-endian fields rather than serialized C++ structs.
