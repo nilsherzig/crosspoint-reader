@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "FsrsScheduler.h"
+#include "CardScheduler.h"
 
 namespace flashcards {
 
@@ -22,6 +22,8 @@ struct Config {
   uint16_t newCardsPerDay = 20;
   float desiredRetention = 0.90f;
   uint32_t maximumIntervalDays = 36500;
+  LearningSteps learningSteps{{1, 10}, 2};
+  LearningSteps relearningSteps{{10}, 1};
 };
 
 struct DeckSummary {
@@ -32,6 +34,7 @@ struct DeckSummary {
   uint32_t cardCount = 0;
   uint16_t dueCount = 0;
   uint16_t newCount = 0;
+  uint16_t unseenCount = 0;
   bool countsAvailable = false;
 
   bool valid() const { return error.empty(); }
@@ -48,6 +51,8 @@ struct StudyCard {
   int64_t lastReview = 0;
   int64_t due = 0;
   int32_t introducedDay = -1;
+  CardPhase phase = CardPhase::New;
+  uint8_t learningStep = 0;
   bool initialized = false;
 };
 
@@ -56,6 +61,7 @@ struct StudyQueue {
   std::vector<uint16_t> dueCards;
   std::vector<uint16_t> newCards;
   uint16_t introducedToday = 0;
+  uint16_t unseenCount = 0;
 };
 
 class FlashcardStore {
@@ -68,7 +74,7 @@ class FlashcardStore {
   static bool loadConfig(Config& config, std::string& error);
   static bool scanDecks(std::vector<DeckSummary>& decks);
   static bool loadStudyQueue(const DeckSummary& deck, int64_t now, const Config& config, StudyQueue& queue,
-                             std::string& error);
+                             std::string& error, uint16_t additionalNewCards = 0);
   static bool readCardText(const DeckSummary& deck, const StudyCard& card, bool back, std::string& text,
                            std::string& error);
   static bool introduceCard(const DeckSummary& deck, StudyCard& card, int64_t now, std::string& error);

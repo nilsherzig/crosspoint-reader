@@ -8,9 +8,11 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <cstdio>
 
 #include "FlashcardReviewActivity.h"
+#include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -23,11 +25,10 @@ void FlashcardDeckListActivity::onEnter() {
   LOG_DBG("FLASH", "Opening flashcard deck list");
   if (!flashcards::FlashcardStore::scanDecks(decks)) LOG_ERR("FLASH", "Deck scan failed");
 
-  flashcards::Config config;
   std::string detail;
   int64_t now = 0;
   const bool clockReady = SETTINGS.clockHasBeenSynced && halClock.getUnixTime(now);
-  const bool countsReady = clockReady && flashcards::FlashcardStore::loadConfig(config, detail);
+  countsReady = clockReady && flashcards::FlashcardStore::loadConfig(config, detail);
   if (!clockReady) {
     LOG_DBG("FLASH", "Deck due/new counts unavailable: RTC is not synchronized");
   } else if (!countsReady) {
@@ -45,6 +46,7 @@ void FlashcardDeckListActivity::onEnter() {
       }
       deck.dueCount = static_cast<uint16_t>(summaryQueue.dueCards.size());
       deck.newCount = static_cast<uint16_t>(summaryQueue.newCards.size());
+      deck.unseenCount = summaryQueue.unseenCount;
       deck.countsAvailable = true;
     }
   }
@@ -112,12 +114,69 @@ void FlashcardDeckListActivity::activateIndex(const int index) {
   nav.selected = index;
   app.clearTapFlash();
 
-  auto activity = makeUniqueNoThrow<FlashcardReviewActivity>(renderer, mappedInput, decks[index]);
+  const auto& deck = decks[index];
+  if (deck.valid() && deck.countsAvailable && deck.dueCount == 0 && deck.newCount == 0 && deck.unseenCount > 0) {
+    const int initial = std::min<int>(deck.unseenCount, config.newCardsPerDay > 0 ? config.newCardsPerDay : 10);
+    auto picker = makeUniqueNoThrow<IntervalSelectionActivity>(
+        renderer, mappedInput, "FlashcardAdditionalNew", StrId::STR_FLASHCARD_LEARN_MORE, initial, 1, deck.unseenCount,
+        1, 10, StrId::STR_FLASHCARD_CARD_COUNT);
+    if (!picker) {
+      LOG_ERR("FLASH", "OOM: additional-new-card picker");
+      return;
+    }
+    startActivityForResult(std::move(picker), [this, index](const ActivityResult& result) {
+      if (!result.isCancelled) {
+        openReview(index, static_cast<uint16_t>(std::get<IntervalResult>(result.data).value));
+      } else {
+        requestUpdate();
+      }
+    });
+    return;
+  }
+  openReview(index, 0);
+}
+
+void FlashcardDeckListActivity::openReview(const size_t index, const uint16_t additionalNewCards) {
+  auto activity = makeUniqueNoThrow<FlashcardReviewActivity>(renderer, mappedInput, decks[index], additionalNewCards);
   if (!activity) {
     LOG_ERR("FLASH", "OOM: FlashcardReviewActivity");
     return;
   }
-  startActivityForResult(std::move(activity), {});
+  startActivityForResult(std::move(activity), [this, index](const ActivityResult&) { refreshDeckCounts(index); });
+}
+
+void FlashcardDeckListActivity::refreshDeckCounts(const size_t index) {
+  if (index >= decks.size()) return;
+  int64_t now = 0;
+  std::string detail;
+  flashcards::StudyQueue summaryQueue;
+  auto& deck = decks[index];
+  deck.countsAvailable = false;
+  if (countsReady && halClock.getUnixTime(now) &&
+      flashcards::FlashcardStore::loadStudyQueue(deck, now, config, summaryQueue, detail)) {
+    deck.dueCount = static_cast<uint16_t>(summaryQueue.dueCards.size());
+    deck.newCount = static_cast<uint16_t>(summaryQueue.newCards.size());
+    deck.unseenCount = summaryQueue.unseenCount;
+    deck.countsAvailable = true;
+  } else if (!detail.empty()) {
+    LOG_ERR("FLASH", "Could not refresh counts for %s: %s", deck.name.c_str(), detail.c_str());
+  }
+  updateSubtitle(index);
+  requestUpdate();
+}
+
+void FlashcardDeckListActivity::updateSubtitle(const size_t index) {
+  if (index >= decks.size() || index >= subtitles.size() || index >= listItems.size()) return;
+  const auto& deck = decks[index];
+  char count[80];
+  if (deck.countsAvailable) {
+    snprintf(count, sizeof(count), tr(STR_FLASHCARD_DECK_COUNTS), static_cast<unsigned>(deck.cardCount),
+             static_cast<unsigned>(deck.dueCount), static_cast<unsigned>(deck.newCount));
+  } else {
+    snprintf(count, sizeof(count), tr(STR_FLASHCARD_CARD_COUNT), static_cast<unsigned>(deck.cardCount));
+  }
+  subtitles[index] = count;
+  listItems[index].subtitle = subtitles[index].c_str();
 }
 
 #endif

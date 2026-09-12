@@ -1,5 +1,8 @@
+#include <CardScheduler.h>
 #include <CsvReader.h>
+#include <FlashcardConfigParser.h>
 #include <FsrsScheduler.h>
+#include <SchedulingFuzzer.h>
 #include <StudyQueueBuilder.h>
 #include <gtest/gtest.h>
 
@@ -113,10 +116,11 @@ TEST(StudyQueueBuilder, OrdersDueCardsAndLimitsUnseenCards) {
 
   std::vector<uint16_t> due;
   std::vector<uint16_t> fresh;
-  flashcards::detail::buildStudyQueues(cards, now, today, 1, 2, due, fresh);
+  const uint16_t unseen = flashcards::detail::buildStudyQueues(cards, now, today, 1, 2, 0, due, fresh);
 
   EXPECT_EQ(due, (std::vector<uint16_t>{4, 1}));
   EXPECT_EQ(fresh, (std::vector<uint16_t>{2, 0}));
+  EXPECT_EQ(unseen, 2);
 }
 
 TEST(StudyQueueBuilder, KeepsTodaysIntroducedCardsWhenDailyLimitIsExhausted) {
@@ -128,10 +132,108 @@ TEST(StudyQueueBuilder, KeepsTodaysIntroducedCardsWhenDailyLimitIsExhausted) {
 
   std::vector<uint16_t> due;
   std::vector<uint16_t> fresh;
-  flashcards::detail::buildStudyQueues(cards, static_cast<int64_t>(today) * 86400, today, 20, 20, due, fresh);
+  flashcards::detail::buildStudyQueues(cards, static_cast<int64_t>(today) * 86400, today, 20, 20, 0, due, fresh);
 
   EXPECT_TRUE(due.empty());
   EXPECT_EQ(fresh, (std::vector<uint16_t>{0}));
+}
+
+TEST(StudyQueueBuilder, AddsRequestedCardsBeyondDailyLimit) {
+  constexpr int32_t today = 100;
+  std::vector<flashcards::StudyCard> cards(3);
+  cards[0].sourceOrder = 2;
+  cards[1].sourceOrder = 0;
+  cards[2].sourceOrder = 1;
+
+  std::vector<uint16_t> due;
+  std::vector<uint16_t> fresh;
+  flashcards::detail::buildStudyQueues(cards, static_cast<int64_t>(today) * 86400, today, 20, 20, 2, due, fresh);
+
+  EXPECT_EQ(fresh, (std::vector<uint16_t>{1, 2}));
+}
+
+TEST(FlashcardConfigParser, ParsesBoundedMinuteArrays) {
+  char valid[] = " [1, 10, 60] ";
+  flashcards::LearningSteps steps;
+  ASSERT_TRUE(flashcards::detail::parseLearningSteps(valid, steps));
+  ASSERT_EQ(steps.count, 3);
+  EXPECT_EQ(steps.minutes[0], 1);
+  EXPECT_EQ(steps.minutes[1], 10);
+  EXPECT_EQ(steps.minutes[2], 60);
+
+  char descending[] = "[10, 1]";
+  EXPECT_FALSE(flashcards::detail::parseLearningSteps(descending, steps));
+  char empty[] = "[]";
+  EXPECT_FALSE(flashcards::detail::parseLearningSteps(empty, steps));
+  char tooLong[] = "[1, 2, 3, 4, 5, 6, 7, 8, 9]";
+  EXPECT_FALSE(flashcards::detail::parseLearningSteps(tooLong, steps));
+}
+
+TEST(SchedulingFuzzer, UsesAnkiStyleReviewRanges) {
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(2.49f, 1, 1000).lower, 2U);
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(2.49f, 1, 1000).upper, 2U);
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(7.0f, 1, 1000).lower, 5U);
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(7.0f, 1, 1000).upper, 9U);
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(37.0f, 1, 1000).lower, 33U);
+  EXPECT_EQ(flashcards::SchedulingFuzzer::reviewBounds(37.0f, 1, 1000).upper, 41U);
+}
+
+TEST(SchedulingFuzzer, IsDeterministicAndBoundsLearningDelay) {
+  const uint32_t first = flashcards::SchedulingFuzzer::fuzzReviewInterval(17.0f, 1, 1000, 1234);
+  EXPECT_EQ(first, flashcards::SchedulingFuzzer::fuzzReviewInterval(17.0f, 1, 1000, 1234));
+  EXPECT_GE(first, 14U);
+  EXPECT_LE(first, 20U);
+
+  const uint32_t learning = flashcards::SchedulingFuzzer::fuzzLearningDelay(600, 1234);
+  EXPECT_GE(learning, 600U);
+  EXPECT_LT(learning, 750U);
+}
+
+TEST(CardScheduler, AdvancesThroughDefaultLearningSteps) {
+  const flashcards::LearningSteps learning{{1, 10}, 2};
+  const flashcards::LearningSteps relearning{{10}, 1};
+  const flashcards::CardSchedulingOptions options{0.9f, 36500, &learning, &relearning};
+  flashcards::CardSchedulingState state;
+  flashcards::CardSchedulingResult result;
+
+  ASSERT_TRUE(flashcards::CardScheduler::next(state, flashcards::Rating::Again, options, 1, result));
+  EXPECT_EQ(result.phase, flashcards::CardPhase::Learning);
+  EXPECT_EQ(result.learningStep, 0);
+  EXPECT_GE(result.learningDelaySeconds, 60U);
+  EXPECT_LT(result.learningDelaySeconds, 75U);
+
+  state = {result.memory, result.phase, result.learningStep, 0, true};
+  ASSERT_TRUE(flashcards::CardScheduler::next(state, flashcards::Rating::Good, options, 2, result));
+  EXPECT_EQ(result.phase, flashcards::CardPhase::Learning);
+  EXPECT_EQ(result.learningStep, 1);
+  EXPECT_GE(result.learningDelaySeconds, 600U);
+  EXPECT_LT(result.learningDelaySeconds, 750U);
+
+  state = {result.memory, result.phase, result.learningStep, 0, true};
+  ASSERT_TRUE(flashcards::CardScheduler::next(state, flashcards::Rating::Good, options, 3, result));
+  EXPECT_EQ(result.phase, flashcards::CardPhase::Review);
+  EXPECT_EQ(result.learningDelaySeconds, 0U);
+  EXPECT_GE(result.intervalDays, 1U);
+}
+
+TEST(CardScheduler, SendsFailedReviewsThroughRelearning) {
+  const flashcards::LearningSteps learning{{1, 10}, 2};
+  const flashcards::LearningSteps relearning{{10}, 1};
+  const flashcards::CardSchedulingOptions options{0.9f, 36500, &learning, &relearning};
+  const flashcards::CardSchedulingState review{{3.2602f, 4.8846316f}, flashcards::CardPhase::Review, 0, 10, true};
+  flashcards::CardSchedulingResult result;
+
+  ASSERT_TRUE(flashcards::CardScheduler::next(review, flashcards::Rating::Again, options, 4, result));
+  EXPECT_EQ(result.phase, flashcards::CardPhase::Relearning);
+  EXPECT_EQ(result.learningStep, 0);
+  EXPECT_GE(result.learningDelaySeconds, 600U);
+  EXPECT_LT(result.learningDelaySeconds, 750U);
+
+  const flashcards::CardSchedulingState relearn{result.memory, result.phase, result.learningStep, 0, true};
+  ASSERT_TRUE(flashcards::CardScheduler::next(relearn, flashcards::Rating::Good, options, 5, result));
+  EXPECT_EQ(result.phase, flashcards::CardPhase::Review);
+  EXPECT_EQ(result.learningDelaySeconds, 0U);
+  EXPECT_GE(result.intervalDays, 1U);
 }
 
 }  // namespace
