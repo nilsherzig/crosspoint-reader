@@ -23,11 +23,17 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/flashcards/FlashcardDeckListActivity.h"
+#endif
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Library, File transfer, Settings
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  ++count;  // Flashcards
+#endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -321,6 +327,11 @@ void HomeActivity::loop() {
       case HomeMenuItem::OPDS_BROWSER:  // the library slot
         hasPlugins ? onPluginsOpen() : onOpdsBrowserOpen();
         break;
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+      case HomeMenuItem::FLASHCARDS:
+        onFlashcardsOpen();
+        break;
+#endif
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
@@ -533,6 +544,11 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin() + 2, Plugins);
   }
 
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  menuItems.insert(menuItems.begin() + 2 + (hasLibrarySlot() ? 1 : 0), tr(STR_FLASHCARDS));
+  menuIcons.insert(menuIcons.begin() + 2 + (hasLibrarySlot() ? 1 : 0), Bookmark);
+#endif
+
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     // Insert Continue Reading at the top if enabled in theme
     menuItems.insert(menuItems.begin(), tr(STR_CONTINUE_READING));
@@ -578,3 +594,14 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
 void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(hasOpdsServers); }
+
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+void HomeActivity::onFlashcardsOpen() {
+  auto activity = makeUniqueNoThrow<FlashcardDeckListActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("HOME", "OOM: FlashcardDeckListActivity");
+    return;
+  }
+  activityManager.replaceActivity(std::move(activity));
+}
+#endif

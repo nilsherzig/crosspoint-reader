@@ -701,3 +701,7 @@ Book moves rename the store and its `.deleted` journal (plus recovery sidecars)
 together. The stored source path is informational and is refreshed on the next
 save; the current file path selects the store. Local book deletion cleans up all
 of these sidecars but preserves the independent `My Clippings.txt` export.
+
+## Flashcard caches
+
+Flashcard cache and history formats are implemented in `lib/Flashcards/FlashcardStore.cpp` and described, together with their invalidation and recovery behavior, in [flashcards.md](flashcards.md). Both formats currently use version **1** and explicit little-endian fields rather than serialized C++ structs.
