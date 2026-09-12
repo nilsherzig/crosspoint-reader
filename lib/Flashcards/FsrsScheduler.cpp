@@ -57,10 +57,9 @@ float nextShortTermStability(const float stability, const Rating rating) {
   return stability * (rating >= Rating::Good ? std::max(increase, 1.0f) : increase);
 }
 
-uint32_t intervalFor(const float stability, const float retention, const uint32_t maximumIntervalDays) {
+float intervalFor(const float stability, const float retention, const uint32_t maximumIntervalDays) {
   const float days = stability / FACTOR * (std::pow(retention, 1.0f / DECAY) - 1.0f);
-  const float bounded = std::clamp(days, 1.0f, static_cast<float>(maximumIntervalDays));
-  return static_cast<uint32_t>(std::floor(bounded + 0.5f));
+  return std::clamp(days, 1.0f, static_cast<float>(maximumIntervalDays));
 }
 }  // namespace
 
@@ -93,7 +92,8 @@ bool FsrsScheduler::next(const MemoryState* current, const uint32_t elapsedDays,
   if (!std::isfinite(result.memory.stability) || !std::isfinite(result.memory.difficulty)) return false;
   result.memory.stability = std::clamp(result.memory.stability, MIN_STABILITY, MAX_STABILITY);
   result.memory.difficulty = clampDifficulty(result.memory.difficulty);
-  result.intervalDays = intervalFor(result.memory.stability, desiredRetention, maximumIntervalDays);
+  result.intervalDaysExact = intervalFor(result.memory.stability, desiredRetention, maximumIntervalDays);
+  result.intervalDays = static_cast<uint32_t>(std::floor(result.intervalDaysExact + 0.5f));
   return true;
 }
 

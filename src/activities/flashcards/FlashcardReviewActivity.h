@@ -7,14 +7,17 @@
 #include <FlashcardStore.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 
 class FlashcardReviewActivity final : public Activity, private UiAppHost {
  public:
-  FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, flashcards::DeckSummary deck);
+  FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, flashcards::DeckSummary deck,
+                          uint16_t additionalNewCards = 0);
 
   void onEnter() override;
   void onExit() override;
@@ -22,7 +25,7 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   void render(RenderLock&&) override;
 
  private:
-  enum class Phase { Due, New, Complete, Error };
+  enum class Phase { Due, New, Waiting, Complete, Error };
   enum class ErrorKind { None, Clock, Config, Deck, Save };
 
   static constexpr freeink::ui::ActionId ACTION_REVEAL = 1;
@@ -37,24 +40,35 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   void handleAction(freeink::ui::ActionId action);
   void reveal();
   void rate(flashcards::Rating rating);
-  void advance(bool repeat);
+  void advance();
   bool loadCurrentCard();
+  bool loadCard(int64_t now);
+  void showWaiting(int64_t now);
   void showError(ErrorKind kind, const std::string& detail);
   std::vector<uint16_t>& currentPhaseQueue();
+  size_t& currentPhasePosition();
   const char* phaseName() const;
   const char* errorText() const;
 
   flashcards::DeckSummary deck;
   flashcards::Config config;
   flashcards::StudyQueue queue;
+  std::vector<uint16_t> pendingLearningCards;
   Phase phase = Phase::Due;
   ErrorKind errorKind = ErrorKind::None;
-  size_t phasePosition = 0;
+  size_t duePosition = 0;
+  size_t newPosition = 0;
+  size_t currentPendingPosition = 0;
+  int64_t waitingUntil = 0;
+  uint32_t lastDueCheck = 0;
   uint16_t currentCardIndex = 0;
+  uint16_t additionalNewCards = 0;
+  bool currentFromPending = false;
   bool answerShown = false;
   std::string frontText;
   std::string backText;
   char progressText[32]{};
+  char waitingText[64]{};
 };
 
 #endif
