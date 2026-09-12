@@ -49,9 +49,9 @@ A session has strict phases:
 
 `Again` updates FSRS immediately, sets the due timestamp to now, and appends the card to the end of its current phase. A later same-session rating therefore has zero elapsed days and takes the FSRS short-term path. `Good` schedules at least one day ahead. The new phase cannot start while an `Again` repeat remains in the due phase.
 
-The hardware RTC must have been synchronized before studying. Deck browsing and import still work without a valid clock. Day boundaries and due timestamps use UTC so timezone-setting changes do not alter scheduling.
+The hardware RTC must have been synchronized before studying. Deck browsing and import still work without a valid clock. Day boundaries and due timestamps use UTC so timezone-setting changes do not alter scheduling. When the clock and configuration are valid, each deck row shows its total, due, and currently available new-card counts; otherwise it shows only the total.
 
-On the front, tapping the card or pressing either page-side button reveals the answer. On the answer, the left/back page-side button or left touch action selects `Again`; the right/forward page-side button or right touch action selects `Good`. Back and the device's global Home behavior leave the session.
+On the front, tapping the card or pressing either page-side button reveals the answer. The revealed view keeps the question in its original upper section and adds the answer below it; both are left-aligned. Tapping anywhere in the left or right half of the card body selects `Again` or `Good`, respectively, as do the matching footer controls and page-side buttons. The header is excluded from these voting regions, and global Back, Home, and control-center gestures are handled before app touch routing.
 
 ## Identity, import, and persistence
 
@@ -67,7 +67,27 @@ Every introduction and review is appended to the deck's `.history` journal. Ever
 
 CSV import is streaming. It keeps the current row, an 8 KiB Bloom filter, and small buffered-I/O blocks in memory; card records and decoded text go to separate temporary SD files before the final cache is assembled. Bloom-filter hits are verified against the temporary records, so the filter cannot reject a unique card by itself.
 
-Studying loads fixed-size metadata and 16-bit queue indexes for only the selected deck, while front and back text are fetched one card at a time. The vectors are pre-reserved and bounded by the 2,000-card limit. A process-lifetime static pool was rejected because it would permanently reserve the worst-case size even outside the app; the selected-deck allocations are released in `onExit()`.
+Studying loads fixed-size metadata and 16-bit queue indexes for only the selected deck, while front and back text are fetched one card at a time. The vectors are pre-reserved and bounded by the 2,000-card limit. The deck overview reuses one bounded queue allocation while calculating counts sequentially, then releases it before rendering. A process-lifetime static pool was rejected because it would permanently reserve the worst-case size even outside the app; the selected-deck allocations are released in `onExit()`.
+
+## Performance diagnostics
+
+Development builds emit state transitions under `[FLASH]` and structured timings under `[FLASHPERF]`. Timed operations include cold imports, cache validation, history replay, queue construction, card text reads, review writes, and complete screen updates. Store timings also report internal RAM and PSRAM before and after each operation, including the largest allocatable block and the allocator's low-water mark. These diagnostics compile out when debug logging is disabled.
+
+Generate reproducible 100-, 1,000-, and 2,000-card decks on a mounted SD card with:
+
+```bash
+python3 scripts/generate_flashcard_benchmark.py /path/to/sd --reset-cache --reset-history
+```
+
+Then capture an unfiltered log while showing only flashcard messages in the terminal:
+
+```bash
+python3 scripts/debugging_monitor.py /dev/ttyACM0 \
+  --filter flash \
+  --log-file flashcards-perf.log
+```
+
+The monitor still collects the firmware's periodic `[MEM]` samples for its internal-RAM and PSRAM graph before applying the display filter. It does not measure CPU utilization; `[FLASHPERF] duration_us` measures user-relevant device wall time, including SD or display waits where applicable. Compare a first deck-list open after `--reset-cache` with a second open without resetting the cache, then open each generated deck, reveal cards, rate with both outcomes, leave the session, and reopen it to measure history replay. `--reset-history` deletes only benchmark-deck history; omit it when measuring history growth.
 
 ## Revisit-friendly decisions
 

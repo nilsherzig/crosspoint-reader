@@ -1,10 +1,10 @@
 #pragma once
 
-#include "FsrsScheduler.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "FsrsScheduler.h"
 
 namespace flashcards {
 
@@ -30,6 +30,9 @@ struct DeckSummary {
   std::string error;
   uint64_t key = 0;
   uint32_t cardCount = 0;
+  uint16_t dueCount = 0;
+  uint16_t newCount = 0;
+  bool countsAvailable = false;
 
   bool valid() const { return error.empty(); }
 };
@@ -69,8 +72,8 @@ class FlashcardStore {
   static bool readCardText(const DeckSummary& deck, const StudyCard& card, bool back, std::string& text,
                            std::string& error);
   static bool introduceCard(const DeckSummary& deck, StudyCard& card, int64_t now, std::string& error);
-  static bool reviewCard(const DeckSummary& deck, StudyCard& card, int64_t now, Rating rating,
-                         const Config& config, std::string& error);
+  static bool reviewCard(const DeckSummary& deck, StudyCard& card, int64_t now, Rating rating, const Config& config,
+                         std::string& error);
 
   static Fingerprint fingerprint(const std::string& front, const std::string& back);
 };

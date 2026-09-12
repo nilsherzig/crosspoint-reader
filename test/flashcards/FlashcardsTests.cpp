@@ -1,5 +1,6 @@
 #include <CsvReader.h>
 #include <FsrsScheduler.h>
+#include <StudyQueueBuilder.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -20,8 +21,9 @@ int readByte(void* context) {
 }
 
 TEST(CsvReader, ParsesRfc4180QuotingAndBom) {
-  StringInput input{"\xEF\xBB\xBF"
-                    "front,back,ignored\r\n\"hello, world\",\"line 1\r\nline \"\"2\"\"\",x\r\n"};
+  StringInput input{
+      "\xEF\xBB\xBF"
+      "front,back,ignored\r\n\"hello, world\",\"line 1\r\nline \"\"2\"\"\",x\r\n"};
   flashcards::CsvReader reader(readByte, &input);
   std::vector<std::string> fields;
   std::string error;
@@ -34,8 +36,9 @@ TEST(CsvReader, ParsesRfc4180QuotingAndBom) {
 }
 
 TEST(CsvReader, AcceptsBomBeforeQuotedHeader) {
-  StringInput input{"\xEF\xBB\xBF"
-                    "\"front\",\"back\"\n"};
+  StringInput input{
+      "\xEF\xBB\xBF"
+      "\"front\",\"back\"\n"};
   flashcards::CsvReader reader(readByte, &input);
   std::vector<std::string> fields;
   std::string error;
@@ -89,6 +92,46 @@ TEST(FsrsScheduler, AppliesShortTermStepAtZeroElapsedDays) {
   ASSERT_TRUE(flashcards::FsrsScheduler::next(&current, 0, flashcards::Rating::Good, 0.9f, 36500, result));
   EXPECT_GT(result.memory.stability, current.stability);
   EXPECT_GE(result.intervalDays, 1U);
+}
+
+TEST(StudyQueueBuilder, OrdersDueCardsAndLimitsUnseenCards) {
+  constexpr int32_t today = 100;
+  constexpr int64_t now = static_cast<int64_t>(today) * 86400;
+  std::vector<flashcards::StudyCard> cards(6);
+  cards[0].sourceOrder = 4;  // unseen
+  cards[1].sourceOrder = 3;
+  cards[1].initialized = true;
+  cards[1].due = now - 1;
+  cards[2].sourceOrder = 2;
+  cards[2].introducedDay = today;
+  cards[3].sourceOrder = 1;
+  cards[3].initialized = true;
+  cards[3].due = now + 1;
+  cards[4].sourceOrder = 0;
+  cards[4].introducedDay = today - 1;
+  cards[5].sourceOrder = 5;  // unseen
+
+  std::vector<uint16_t> due;
+  std::vector<uint16_t> fresh;
+  flashcards::detail::buildStudyQueues(cards, now, today, 1, 2, due, fresh);
+
+  EXPECT_EQ(due, (std::vector<uint16_t>{4, 1}));
+  EXPECT_EQ(fresh, (std::vector<uint16_t>{2, 0}));
+}
+
+TEST(StudyQueueBuilder, KeepsTodaysIntroducedCardsWhenDailyLimitIsExhausted) {
+  constexpr int32_t today = 100;
+  std::vector<flashcards::StudyCard> cards(2);
+  cards[0].sourceOrder = 1;
+  cards[0].introducedDay = today;
+  cards[1].sourceOrder = 0;  // unseen
+
+  std::vector<uint16_t> due;
+  std::vector<uint16_t> fresh;
+  flashcards::detail::buildStudyQueues(cards, static_cast<int64_t>(today) * 86400, today, 20, 20, due, fresh);
+
+  EXPECT_TRUE(due.empty());
+  EXPECT_EQ(fresh, (std::vector<uint16_t>{0}));
 }
 
 }  // namespace
