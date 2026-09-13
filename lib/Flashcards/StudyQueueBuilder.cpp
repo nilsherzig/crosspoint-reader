@@ -5,9 +5,35 @@
 
 namespace flashcards::detail {
 
+bool learningCardPending(const StudyCard& card, const int64_t now) {
+  return card.initialized && card.due > now &&
+         (card.phase == CardPhase::Learning || card.phase == CardPhase::Relearning);
+}
+
 bool learningCardReady(const int64_t due, const int64_t now, const uint32_t learnAheadLimitMinutes,
                        const bool baseCardsRemaining) {
   return due <= now || (!baseCardsRemaining && due - now < static_cast<int64_t>(learnAheadLimitMinutes) * 60);
+}
+
+size_t nextLearningCardPosition(const std::vector<StudyCard>& cards, const std::vector<uint16_t>& pendingLearningCards,
+                                const int64_t now, const uint32_t learnAheadLimitMinutes,
+                                const bool baseCardsRemaining) {
+  size_t earliestDuePosition = pendingLearningCards.size();
+  size_t firstLearnAheadPosition = pendingLearningCards.size();
+  int64_t earliestDue = INT64_MAX;
+  for (size_t i = 0; i < pendingLearningCards.size(); ++i) {
+    const int64_t due = cards[pendingLearningCards[i]].due;
+    if (due <= now) {
+      if (due < earliestDue) {
+        earliestDue = due;
+        earliestDuePosition = i;
+      }
+    } else if (firstLearnAheadPosition == pendingLearningCards.size() &&
+               learningCardReady(due, now, learnAheadLimitMinutes, baseCardsRemaining)) {
+      firstLearnAheadPosition = i;
+    }
+  }
+  return earliestDuePosition < pendingLearningCards.size() ? earliestDuePosition : firstLearnAheadPosition;
 }
 
 uint16_t buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, const int32_t today,
@@ -22,7 +48,7 @@ uint16_t buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now
   for (uint16_t i = 0; i < cards.size(); ++i) {
     const StudyCard& card = cards[i];
     if (card.initialized) {
-      if (card.due <= now) dueCards.push_back(i);
+      if (card.due <= now || learningCardPending(card, now)) dueCards.push_back(i);
     } else if (card.introducedDay == today) {
       newCards.push_back(i);
     } else if (card.introducedDay >= 0) {
