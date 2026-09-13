@@ -6,6 +6,7 @@
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <StudyQueueBuilder.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -50,9 +51,16 @@ void FlashcardReviewActivity::onEnter() {
     return;
   }
   pendingLearningCards.reserve(queue.cards.size());
+  for (uint16_t i = 0; i < queue.cards.size(); ++i) {
+    const auto& card = queue.cards[i];
+    if (card.initialized && card.due > now &&
+        (card.phase == flashcards::CardPhase::Learning || card.phase == flashcards::CardPhase::Relearning)) {
+      pendingLearningCards.push_back(i);
+    }
+  }
 
   phase = queue.dueCards.empty() ? Phase::New : Phase::Due;
-  if (phase == Phase::New && queue.newCards.empty()) phase = Phase::Complete;
+  if (phase == Phase::New && queue.newCards.empty() && pendingLearningCards.empty()) phase = Phase::Complete;
   duePosition = 0;
   newPosition = 0;
   LOG_DBG("FLASH", "Study session ready: deck=%s phase=%s due=%u new=%u", deck.name.c_str(), phaseName(),
@@ -91,7 +99,7 @@ void FlashcardReviewActivity::loop() {
       showError(ErrorKind::Clock, "RTC read failed while waiting for learning card");
       return;
     }
-    if (now >= waitingUntil) {
+    if (flashcards::detail::learningCardReady(waitingUntil, now, config.learnAheadLimitMinutes, false)) {
       loadCurrentCard();
       return;
     }
@@ -168,6 +176,7 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
 
   // The question keeps the same rectangle and style before and after reveal so it never jumps between refreshes.
   fui::TextStyle questionStyle = theme.titleText;
+  questionStyle.bold = false;
   const int16_t questionLineHeight = screen.target().lineHeight(questionStyle.font);
   questionStyle.align = fui::TextAlign::Left;
   questionStyle.maxLines = static_cast<uint8_t>(
@@ -268,11 +277,13 @@ bool FlashcardReviewActivity::loadCurrentCard() {
     return false;
   }
 
+  const bool baseCardsRemaining = duePosition < queue.dueCards.size() || newPosition < queue.newCards.size();
   size_t earliestPosition = pendingLearningCards.size();
   int64_t earliestDue = INT64_MAX;
   for (size_t i = 0; i < pendingLearningCards.size(); ++i) {
     const int64_t due = queue.cards[pendingLearningCards[i]].due;
-    if (due <= now && due < earliestDue) {
+    if (flashcards::detail::learningCardReady(due, now, config.learnAheadLimitMinutes, baseCardsRemaining) &&
+        due < earliestDue) {
       earliestDue = due;
       earliestPosition = i;
     }

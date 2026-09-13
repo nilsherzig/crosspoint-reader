@@ -20,6 +20,7 @@ struct Fingerprint {
 
 struct Config {
   uint16_t newCardsPerDay = 20;
+  uint32_t learnAheadLimitMinutes = 20;
   float desiredRetention = 0.90f;
   uint32_t maximumIntervalDays = 36500;
   LearningSteps learningSteps{{1, 10}, 2};

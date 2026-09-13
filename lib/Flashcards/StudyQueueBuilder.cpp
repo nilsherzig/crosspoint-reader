@@ -5,6 +5,11 @@
 
 namespace flashcards::detail {
 
+bool learningCardReady(const int64_t due, const int64_t now, const uint32_t learnAheadLimitMinutes,
+                       const bool baseCardsRemaining) {
+  return due <= now || (!baseCardsRemaining && due - now < static_cast<int64_t>(learnAheadLimitMinutes) * 60);
+}
+
 uint16_t buildStudyQueues(const std::vector<StudyCard>& cards, const int64_t now, const int32_t today,
                           const uint16_t introducedToday, const uint16_t newCardsPerDay,
                           const uint16_t additionalNewCards, std::vector<uint16_t>& dueCards,
