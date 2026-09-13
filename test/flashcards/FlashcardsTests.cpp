@@ -115,6 +115,28 @@ TEST(StudyQueueBuilder, LearnAheadOnlyAfterBaseCardsAreExhausted) {
   EXPECT_TRUE(flashcards::detail::learningCardReady(now + 86400, now, UINT32_MAX, false));
 }
 
+TEST(StudyQueueBuilder, KeepsPendingOrderWhenOnlyLearnAheadCardsAreReady) {
+  constexpr int64_t now = 1700000000;
+  std::vector<flashcards::StudyCard> cards(3);
+  cards[0].due = now + 600;
+  cards[1].due = now + 60;
+  cards[2].due = now + 1200;
+  const std::vector<uint16_t> pending{0, 1, 2};
+
+  EXPECT_EQ(flashcards::detail::nextLearningCardPosition(cards, pending, now, 20, false), 0u);
+}
+
+TEST(StudyQueueBuilder, PrioritizesTheEarliestActuallyDueLearningCard) {
+  constexpr int64_t now = 1700000000;
+  std::vector<flashcards::StudyCard> cards(3);
+  cards[0].due = now + 60;
+  cards[1].due = now - 1;
+  cards[2].due = now - 10;
+  const std::vector<uint16_t> pending{0, 1, 2};
+
+  EXPECT_EQ(flashcards::detail::nextLearningCardPosition(cards, pending, now, 20, false), 2u);
+}
+
 TEST(StudyQueueBuilder, OrdersDueCardsAndLimitsUnseenCards) {
   constexpr int32_t today = 100;
   constexpr int64_t now = static_cast<int64_t>(today) * 86400;
@@ -139,6 +161,31 @@ TEST(StudyQueueBuilder, OrdersDueCardsAndLimitsUnseenCards) {
   EXPECT_EQ(due, (std::vector<uint16_t>{4, 1}));
   EXPECT_EQ(fresh, (std::vector<uint16_t>{2, 0}));
   EXPECT_EQ(unseen, 2);
+}
+
+TEST(StudyQueueBuilder, IncludesFutureLearningStepsButNotFutureReviewsInDueCount) {
+  constexpr int32_t today = 100;
+  constexpr int64_t now = static_cast<int64_t>(today) * 86400;
+  std::vector<flashcards::StudyCard> cards(4);
+  cards[0].initialized = true;
+  cards[0].phase = flashcards::CardPhase::Learning;
+  cards[0].due = now + 600;
+  cards[1].initialized = true;
+  cards[1].phase = flashcards::CardPhase::Relearning;
+  cards[1].due = now + 1200;
+  cards[2].initialized = true;
+  cards[2].phase = flashcards::CardPhase::Review;
+  cards[2].due = now + 1;
+  cards[3].initialized = true;
+  cards[3].phase = flashcards::CardPhase::Learning;
+  cards[3].due = now - 1;
+
+  std::vector<uint16_t> due;
+  std::vector<uint16_t> fresh;
+  flashcards::detail::buildStudyQueues(cards, now, today, 0, 0, 0, due, fresh);
+
+  EXPECT_EQ(due, (std::vector<uint16_t>{3, 0, 1}));
+  EXPECT_TRUE(fresh.empty());
 }
 
 TEST(StudyQueueBuilder, KeepsTodaysIntroducedCardsWhenDailyLimitIsExhausted) {

@@ -51,13 +51,15 @@ void FlashcardReviewActivity::onEnter() {
     return;
   }
   pendingLearningCards.reserve(queue.cards.size());
-  for (uint16_t i = 0; i < queue.cards.size(); ++i) {
-    const auto& card = queue.cards[i];
-    if (card.initialized && card.due > now &&
-        (card.phase == flashcards::CardPhase::Learning || card.phase == flashcards::CardPhase::Relearning)) {
-      pendingLearningCards.push_back(i);
+  size_t readyDueCount = 0;
+  for (const uint16_t index : queue.dueCards) {
+    if (flashcards::detail::learningCardPending(queue.cards[index], now)) {
+      pendingLearningCards.push_back(index);
+    } else {
+      queue.dueCards[readyDueCount++] = index;
     }
   }
+  queue.dueCards.resize(readyDueCount);
 
   phase = queue.dueCards.empty() ? Phase::New : Phase::Due;
   if (phase == Phase::New && queue.newCards.empty() && pendingLearningCards.empty()) phase = Phase::Complete;
@@ -278,20 +280,12 @@ bool FlashcardReviewActivity::loadCurrentCard() {
   }
 
   const bool baseCardsRemaining = duePosition < queue.dueCards.size() || newPosition < queue.newCards.size();
-  size_t earliestPosition = pendingLearningCards.size();
-  int64_t earliestDue = INT64_MAX;
-  for (size_t i = 0; i < pendingLearningCards.size(); ++i) {
-    const int64_t due = queue.cards[pendingLearningCards[i]].due;
-    if (flashcards::detail::learningCardReady(due, now, config.learnAheadLimitMinutes, baseCardsRemaining) &&
-        due < earliestDue) {
-      earliestDue = due;
-      earliestPosition = i;
-    }
-  }
-  if (earliestPosition < pendingLearningCards.size()) {
+  const size_t learningPosition = flashcards::detail::nextLearningCardPosition(
+      queue.cards, pendingLearningCards, now, config.learnAheadLimitMinutes, baseCardsRemaining);
+  if (learningPosition < pendingLearningCards.size()) {
     currentFromPending = true;
-    currentPendingPosition = earliestPosition;
-    currentCardIndex = pendingLearningCards[earliestPosition];
+    currentPendingPosition = learningPosition;
+    currentCardIndex = pendingLearningCards[learningPosition];
     if (phase == Phase::Waiting) phase = Phase::Due;
     return loadCard(now);
   }
