@@ -30,13 +30,14 @@ Limits chosen to bound RAM use are:
 
 ```toml
 new_cards_per_day = 20
+learn_ahead_limit_minutes = 20
 desired_retention = 0.90
 maximum_interval_days = 36500
 learning_steps_minutes = [1, 10]
 relearning_steps_minutes = [10]
 ```
 
-This is intentionally a small TOML subset: blank lines, `#` comments, the three scalar keys, and the two integer arrays above are supported. Unknown keys, unsupported TOML syntax, and out-of-range values block studying until corrected. Valid ranges are 0–1,000 new cards, 0.70–0.99 retention, and 1–365,000 days. Each learning-step array must contain 1–8 strictly increasing whole-minute values between 1 and 10,080.
+This is intentionally a small TOML subset: blank lines, `#` comments, the four scalar keys, and the two integer arrays above are supported. Unknown keys, unsupported TOML syntax, and out-of-range values block studying until corrected. Valid ranges are 0–1,000 new cards, 0.70–0.99 retention, and 1–365,000 days. The learn-ahead limit accepts whole minutes from 0 to 4,294,967,295. Each learning-step array must contain 1–8 strictly increasing whole-minute values between 1 and 10,080.
 
 The new-card limit applies independently to each deck and UTC calendar day. A new card consumes quota when it is first displayed, not when a session is opened or when the card is first rated. Due cards are never limited. When a selected deck has no due or available new cards but still has unseen cards, a numeric picker can add a one-session allowance of 1–2,000 cards. Only cards actually displayed consume that allowance; the configured daily limit is not changed.
 
@@ -53,7 +54,7 @@ A session has strict phases:
 1. all due cards, ordered by due timestamp and then CSV order;
 2. today's introduced and selected new cards, in CSV order.
 
-Learning and relearning cards become eligible at their timestamp and take priority once due. Other due and new cards continue while a step delay is running. If no other card remains, the session displays the time until the next learning card and automatically resumes when it becomes due; the user may leave and return later. A later same-day rating uses `elapsedDays = 0` and therefore takes the FSRS short-term path. A graduated `Good` schedules at least one day ahead.
+Learning and relearning cards become eligible at their timestamp and take priority once due. Other due and new cards continue while a step delay is running. If no other card remains, learning and relearning cards are shown early when their remaining delay is strictly less than `learn_ahead_limit_minutes` (default: 20). This also applies after reopening a deck, and never brings graduated review cards forward. With a limit of 0, the full delay is respected. Outside the window, the session displays the time until the next learning card and automatically resumes when it enters the window or becomes due; the user may leave and return later. A later same-day rating uses `elapsedDays = 0` and therefore takes the FSRS short-term path. A graduated `Good` schedules at least one day ahead.
 
 The hardware RTC must have been synchronized before studying. Deck browsing and import still work without a valid clock. Day boundaries and due timestamps use UTC so timezone-setting changes do not alter scheduling. When the clock and configuration are valid, each deck row shows its total, due, and currently available new-card counts; otherwise it shows only the total.
 

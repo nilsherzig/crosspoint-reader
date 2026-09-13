@@ -885,6 +885,8 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
         float floatValue = 0.0f;
         if (strcmp(key, "new_cards_per_day") == 0 && parseUnsigned(setting, unsignedValue) && unsignedValue <= 1000) {
           config.newCardsPerDay = static_cast<uint16_t>(unsignedValue);
+        } else if (strcmp(key, "learn_ahead_limit_minutes") == 0 && parseUnsigned(setting, unsignedValue)) {
+          config.learnAheadLimitMinutes = unsignedValue;
         } else if (strcmp(key, "desired_retention") == 0 && parseFloat(setting, floatValue) && floatValue >= 0.70f &&
                    floatValue <= 0.99f) {
           config.desiredRetention = floatValue;
