@@ -97,6 +97,24 @@ TEST(FsrsScheduler, AppliesShortTermStepAtZeroElapsedDays) {
   EXPECT_GE(result.intervalDays, 1U);
 }
 
+TEST(StudyQueueBuilder, LearnAheadDefaultsToTwentyMinutes) {
+  EXPECT_EQ(flashcards::Config{}.learnAheadLimitMinutes, 20u);
+}
+
+TEST(StudyQueueBuilder, LearnAheadOnlyAfterBaseCardsAreExhausted) {
+  constexpr int64_t now = 1700000000;
+  EXPECT_TRUE(flashcards::detail::learningCardReady(now - 1, now, 20, true));
+  EXPECT_TRUE(flashcards::detail::learningCardReady(now, now, 0, true));
+  EXPECT_FALSE(flashcards::detail::learningCardReady(now + 1, now, 20, true));
+  EXPECT_TRUE(flashcards::detail::learningCardReady(now + 1199, now, 20, false));
+  EXPECT_FALSE(flashcards::detail::learningCardReady(now + 1200, now, 20, false));
+  EXPECT_FALSE(flashcards::detail::learningCardReady(now + 1201, now, 20, false));
+  EXPECT_FALSE(flashcards::detail::learningCardReady(now + 1, now, 0, false));
+  EXPECT_TRUE(flashcards::detail::learningCardReady(now + 59, now, 1, false));
+  EXPECT_FALSE(flashcards::detail::learningCardReady(now + 60, now, 1, false));
+  EXPECT_TRUE(flashcards::detail::learningCardReady(now + 86400, now, UINT32_MAX, false));
+}
+
 TEST(StudyQueueBuilder, OrdersDueCardsAndLimitsUnseenCards) {
   constexpr int32_t today = 100;
   constexpr int64_t now = static_cast<int64_t>(today) * 86400;
