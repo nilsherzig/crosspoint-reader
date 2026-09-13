@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -7,7 +8,10 @@
 
 namespace flashcards::detail {
 
+bool learningCardPending(const StudyCard& card, int64_t now);
 bool learningCardReady(int64_t due, int64_t now, uint32_t learnAheadLimitMinutes, bool baseCardsRemaining);
+size_t nextLearningCardPosition(const std::vector<StudyCard>& cards, const std::vector<uint16_t>& pendingLearningCards,
+                                int64_t now, uint32_t learnAheadLimitMinutes, bool baseCardsRemaining);
 
 uint16_t buildStudyQueues(const std::vector<StudyCard>& cards, int64_t now, int32_t today, uint16_t introducedToday,
                           uint16_t newCardsPerDay, uint16_t additionalNewCards, std::vector<uint16_t>& dueCards,
