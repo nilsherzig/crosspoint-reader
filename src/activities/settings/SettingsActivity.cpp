@@ -10,8 +10,10 @@
 #include <WiFi.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 #include "AboutActivity.h"
 #include "ButtonRemapActivity.h"
@@ -32,8 +34,14 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/flashcards/FlashcardStepsActivity.h"
+#endif
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/util/KeyboardEntryActivity.h"
+#endif
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
@@ -41,14 +49,64 @@
 
 namespace fui = freeink::ui;
 
+namespace {
+
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+SettingInfo makeFlashcardSetting(const StrId nameId, const SettingAction action) {
+  SettingInfo setting = SettingInfo::Action(nameId, action);
+  setting.category = StrId::STR_CAT_FLASHCARDS;
+  return setting;
+}
+
+bool parseUint32Input(const std::string& text, uint32_t& value) {
+  if (text.empty()) return false;
+  uint64_t parsed = 0;
+  for (const char character : text) {
+    if (!std::isdigit(static_cast<unsigned char>(character))) return false;
+    const uint64_t digit = static_cast<unsigned>(character - '0');
+    if (parsed > (std::numeric_limits<uint32_t>::max() - digit) / 10) return false;
+    parsed = parsed * 10 + digit;
+  }
+  value = static_cast<uint32_t>(parsed);
+  return true;
+}
+
+std::string formatFlashcardSteps(const flashcards::LearningSteps& steps) {
+  char value[96];
+  size_t length = 0;
+  value[length++] = '[';
+  for (uint8_t i = 0; i < steps.count; ++i) {
+    const int written = snprintf(value + length, sizeof(value) - length, "%s%u", i == 0 ? "" : ", ",
+                                 static_cast<unsigned>(steps.minutes[i]));
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(value) - length) return {};
+    length += static_cast<size_t>(written);
+  }
+  if (length + 1 >= sizeof(value)) return {};
+  value[length++] = ']';
+  value[length] = '\0';
+  return value;
+}
+#endif
+
+}  // namespace
+
 SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiTabListActivity("Settings", renderer, mappedInput) {}
+
+int SettingsActivity::categoryCount() const {
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  return BoardConfig::isX4Pro() ? maxCategoryCount : baseCategoryCount;
+#else
+  return baseCategoryCount;
+#endif
+}
 
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
+  flashcardSettings.clear();
 
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
@@ -85,6 +143,28 @@ void SettingsActivity::rebuildSettingsLists() {
       systemSettings.push_back(setting);
     }
   }
+
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  if (BoardConfig::isX4Pro()) {
+    std::string error;
+    if (!flashcards::FlashcardStore::loadConfig(flashcardConfig, error)) {
+      LOG_ERR("SETTINGS", "Could not load flashcard settings: %s", error.c_str());
+    }
+    flashcardSettings.reserve(6);
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_NEW_CARDS_PER_DAY, SettingAction::FlashcardNewCardsPerDay));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_LEARN_AHEAD_LIMIT, SettingAction::FlashcardLearnAheadLimit));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_DESIRED_RETENTION, SettingAction::FlashcardDesiredRetention));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_MAXIMUM_INTERVAL, SettingAction::FlashcardMaximumInterval));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_LEARNING_STEPS, SettingAction::FlashcardLearningSteps));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_RELEARNING_STEPS, SettingAction::FlashcardRelearningSteps));
+  }
+#endif
 
   // Append device-only ACTION items
   if (!BoardConfig::hasTouch()) {
@@ -131,6 +211,9 @@ void SettingsActivity::rebuildSettingsLists() {
     case 3:
       currentSettings = &systemSettings;
       break;
+    case 4:
+      currentSettings = &flashcardSettings;
+      break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
   rebuildRowItems();
@@ -164,6 +247,9 @@ void SettingsActivity::selectCategory(const int categoryIndex) {
       break;
     case 3:
       currentSettings = &systemSettings;
+      break;
+    case 4:
+      currentSettings = &flashcardSettings;
       break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
@@ -239,8 +325,8 @@ void SettingsActivity::stepTab(const int direction) {
   // Ring position 0 stays on the tab bar; a row selection collapses to the
   // new category's first row (per-tab memory is deliberately not kept here).
   const bool onTabBar = ringPos() == 0;
-  selectedCategoryIndex = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
-                                        : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
+  selectedCategoryIndex = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount())
+                                        : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount());
   selectCategory(selectedCategoryIndex);
   activeNav().selected = onTabBar ? 0 : 1;
   requestUpdate();
@@ -442,6 +528,22 @@ void SettingsActivity::toggleCurrentSetting() {
           LOG_ERR("SETTINGS", "OOM: AboutActivity");
         }
         break;
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+      case SettingAction::FlashcardNewCardsPerDay:
+      case SettingAction::FlashcardDesiredRetention:
+      case SettingAction::FlashcardMaximumInterval:
+        openFlashcardNumericPicker(setting.action);
+        break;
+      case SettingAction::FlashcardLearnAheadLimit:
+        openFlashcardLearnAheadEditor();
+        break;
+      case SettingAction::FlashcardLearningSteps:
+        openFlashcardStepsEditor(false);
+        break;
+      case SettingAction::FlashcardRelearningSteps:
+        openFlashcardStepsEditor(true);
+        break;
+#endif
       case SettingAction::None:
         // Do nothing
         break;
@@ -496,8 +598,124 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
-std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+
+bool SettingsActivity::saveFlashcardConfig(const flashcards::Config& config) {
+  std::string error;
+  if (!flashcards::FlashcardStore::saveConfig(config, error)) {
+    LOG_ERR("SETTINGS", "Could not save flashcard settings: %s", error.c_str());
+    return false;
+  }
+  flashcardConfig = config;
+  return true;
+}
+
+void SettingsActivity::openFlashcardNumericPicker(const SettingAction action) {
+  int initialValue = 0;
+  int minValue = 0;
+  int maxValue = 0;
+  int smallStep = 1;
+  int largeStep = 10;
+  StrId titleId = StrId::STR_NONE_OPT;
+  StrId valueFormatId = StrId::STR_NONE_OPT;
+
+  switch (action) {
+    case SettingAction::FlashcardNewCardsPerDay:
+      initialValue = flashcardConfig.newCardsPerDay;
+      minValue = 0;
+      maxValue = 1000;
+      largeStep = 10;
+      titleId = StrId::STR_FLASHCARD_NEW_CARDS_PER_DAY;
+      valueFormatId = StrId::STR_FLASHCARD_CARD_COUNT;
+      break;
+    case SettingAction::FlashcardDesiredRetention:
+      initialValue = std::clamp(static_cast<int>(flashcardConfig.desiredRetention * 100.0f + 0.5f), 70, 99);
+      minValue = 70;
+      maxValue = 99;
+      largeStep = 5;
+      titleId = StrId::STR_FLASHCARD_DESIRED_RETENTION;
+      valueFormatId = StrId::STR_FLASHCARD_PERCENT_FORMAT;
+      break;
+    case SettingAction::FlashcardMaximumInterval:
+      initialValue = static_cast<int>(flashcardConfig.maximumIntervalDays);
+      minValue = 1;
+      maxValue = 365000;
+      largeStep = 100;
+      titleId = StrId::STR_FLASHCARD_MAXIMUM_INTERVAL;
+      valueFormatId = StrId::STR_FLASHCARD_DAYS_FORMAT;
+      break;
+    default:
+      return;
+  }
+
+  auto picker = makeUniqueNoThrow<IntervalSelectionActivity>(renderer, mappedInput, "FlashcardNumericSetting", titleId,
+                                                             initialValue, minValue, maxValue, smallStep, largeStep,
+                                                             valueFormatId);
+  if (!picker) {
+    LOG_ERR("SETTINGS", "OOM: flashcard numeric picker");
+    return;
+  }
+  startActivityForResult(std::move(picker), [this, action](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      const uint32_t value = std::get<IntervalResult>(result.data).value;
+      flashcards::Config updated = flashcardConfig;
+      switch (action) {
+        case SettingAction::FlashcardNewCardsPerDay:
+          updated.newCardsPerDay = static_cast<uint16_t>(value);
+          break;
+        case SettingAction::FlashcardDesiredRetention:
+          updated.desiredRetention = static_cast<float>(value) / 100.0f;
+          break;
+        case SettingAction::FlashcardMaximumInterval:
+          updated.maximumIntervalDays = value;
+          break;
+        default:
+          return;
+      }
+      saveFlashcardConfig(updated);
+    }
+    requestUpdate();
+  });
+}
+
+void SettingsActivity::openFlashcardLearnAheadEditor() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_FLASHCARD_LEARN_AHEAD_LIMIT),
+                                                           std::to_string(flashcardConfig.learnAheadLimitMinutes), 10,
+                                                           InputType::Numeric);
+  if (!keyboard) {
+    LOG_ERR("SETTINGS", "OOM: flashcard learn-ahead editor");
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      uint32_t value = 0;
+      const auto& text = std::get<KeyboardResult>(result.data).text;
+      if (!parseUint32Input(text, value)) {
+        LOG_ERR("SETTINGS", "Invalid learn-ahead limit entered");
+      } else {
+        flashcards::Config updated = flashcardConfig;
+        updated.learnAheadLimitMinutes = value;
+        saveFlashcardConfig(updated);
+      }
+    }
+    requestUpdate();
+  });
+}
+
+void SettingsActivity::openFlashcardStepsEditor(const bool relearning) {
+  auto editor = makeUniqueNoThrow<FlashcardStepsActivity>(renderer, mappedInput, flashcardConfig, relearning);
+  if (!editor) {
+    LOG_ERR("SETTINGS", "OOM: flashcard steps editor");
+    return;
+  }
+  startActivityForResult(std::move(editor), [this](const ActivityResult&) { requestUpdate(); });
+}
+
+#endif
+
+std::string SettingsActivity::settingValueText(const SettingInfo& setting) const {
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
+  if (setting.type == SettingType::ACTION) return flashcardSettingValueText(setting.action);
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     return SETTINGS.*(setting.valuePtr) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
   }
@@ -533,6 +751,40 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return std::to_string(SETTINGS.*(setting.valuePtr));
   }
   return "";
+}
+
+std::string SettingsActivity::flashcardSettingValueText(const SettingAction action) const {
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  char value[48];
+  switch (action) {
+    case SettingAction::FlashcardNewCardsPerDay:
+      snprintf(value, sizeof(value), tr(STR_FLASHCARD_CARD_COUNT),
+               static_cast<unsigned>(flashcardConfig.newCardsPerDay));
+      return value;
+    case SettingAction::FlashcardLearnAheadLimit:
+      snprintf(value, sizeof(value), tr(STR_FLASHCARD_MINUTES_FORMAT),
+               static_cast<unsigned>(flashcardConfig.learnAheadLimitMinutes));
+      return value;
+    case SettingAction::FlashcardDesiredRetention: {
+      const unsigned percent = static_cast<unsigned>(flashcardConfig.desiredRetention * 100.0f + 0.5f);
+      snprintf(value, sizeof(value), tr(STR_FLASHCARD_PERCENT_FORMAT), percent);
+      return value;
+    }
+    case SettingAction::FlashcardMaximumInterval:
+      snprintf(value, sizeof(value), tr(STR_FLASHCARD_DAYS_FORMAT),
+               static_cast<unsigned>(flashcardConfig.maximumIntervalDays));
+      return value;
+    case SettingAction::FlashcardLearningSteps:
+      return formatFlashcardSteps(flashcardConfig.learningSteps);
+    case SettingAction::FlashcardRelearningSteps:
+      return formatFlashcardSteps(flashcardConfig.relearningSteps);
+    default:
+      return "";
+  }
+#else
+  (void)action;
+  return "";
+#endif
 }
 
 void SettingsActivity::buildScreen(UiScreen& screen) {
@@ -586,7 +838,7 @@ void SettingsActivity::drawChrome() {
 void SettingsActivity::drawFooter() {
   const int ring = ringPos();
   const auto confirmLabel =
-      (ring == 0) ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
+      (ring == 0) ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount()])
                   : (ring > 0 && (*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP ? tr(STR_SELECT)
                                                                                                  : tr(STR_TOGGLE));
 
