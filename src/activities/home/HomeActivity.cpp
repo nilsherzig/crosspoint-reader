@@ -527,7 +527,7 @@ void HomeActivity::render(RenderLock&&) {
 
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
   menuItems.insert(menuItems.begin() + 2 + (hasOpdsServers ? 1 : 0), tr(STR_FLASHCARDS));
-  menuIcons.insert(menuIcons.begin() + 2 + (hasOpdsServers ? 1 : 0), Bookmark);
+  menuIcons.insert(menuIcons.begin() + 2 + (hasOpdsServers ? 1 : 0), Flashcards);
 #endif
 
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
