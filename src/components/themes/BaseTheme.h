@@ -145,6 +145,7 @@ enum UIIcon {
   Wifi,
   Hotspot,
   Bookmark,
+  Flashcards,
   Usb,
   Blocks
 };
