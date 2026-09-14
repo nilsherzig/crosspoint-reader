@@ -73,6 +73,7 @@ class FlashcardStore {
   static constexpr uint16_t MAX_CARDS_PER_DECK = 2000;
 
   static bool loadConfig(Config& config, std::string& error);
+  static bool saveConfig(const Config& config, std::string& error);
   static bool scanDecks(std::vector<DeckSummary>& decks);
   static bool loadStudyQueue(const DeckSummary& deck, int64_t now, const Config& config, StudyQueue& queue,
                              std::string& error, uint16_t additionalNewCards = 0);
