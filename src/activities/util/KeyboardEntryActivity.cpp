@@ -31,6 +31,27 @@ int keyboardKeysHeight(const ThemeMetrics& metrics, const int rows, const bool h
 }
 
 // ---------------------------------------------------------------------------
+// Numeric layer.
+// ---------------------------------------------------------------------------
+
+#define NK(label, value) \
+  fui::KeyboardKey { label, label, fui::KeyKind::Normal, fui::StateNormal, value, 2, true, nullptr }
+#define NKS(label, kind, value) \
+  fui::KeyboardKey { label, nullptr, kind, fui::StateNormal, value, 2, true, nullptr }
+
+constexpr fui::KeyboardKey NUMERIC_ROW_1[] = {NK("1", '1'), NK("2", '2'), NK("3", '3')};
+constexpr fui::KeyboardKey NUMERIC_ROW_2[] = {NK("4", '4'), NK("5", '5'), NK("6", '6')};
+constexpr fui::KeyboardKey NUMERIC_ROW_3[] = {NK("7", '7'), NK("8", '8'), NK("9", '9')};
+constexpr fui::KeyboardKey NUMERIC_ROW_4[] = {NKS("Del", fui::KeyKind::Delete, fui::QWERTY_KEY_BACKSPACE), NK("0", '0'),
+                                              NKS("OK", fui::KeyKind::Ok, fui::QWERTY_KEY_ENTER)};
+constexpr fui::KeyboardRow NUMERIC_ROWS[] = {
+    {NUMERIC_ROW_1, 3, 0}, {NUMERIC_ROW_2, 3, 0}, {NUMERIC_ROW_3, 3, 0}, {NUMERIC_ROW_4, 3, 0}};
+constexpr fui::KeyboardLayout NUMERIC_LAYOUT{NUMERIC_ROWS, 4};
+
+#undef NK
+#undef NKS
+
+// ---------------------------------------------------------------------------
 // URL layers. The SDK builtin layouts have no URL variant (":", "/", ".", the
 // snippet panel), so these are app-defined tables over the same public
 // KeyboardLayout structs. URLs are ASCII, so the letter rows are EN-arranged
@@ -165,6 +186,7 @@ void KeyboardEntryActivity::onEnter() {
 void KeyboardEntryActivity::onExit() { Activity::onExit(); }
 
 const fui::KeyboardLayout& KeyboardEntryActivity::currentLayout() const {
+  if (inputType == InputType::Numeric) return NUMERIC_LAYOUT;
   if (symbols) return fui::builtinKeyboardLayout(layoutId, shifted, true);
   if (inputType == InputType::Url) {
     if (urlPanel) return URL_SNIPPET_LAYOUT;
@@ -926,8 +948,12 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const int underlineBottom = inputStartY + inputHeight + lineHeight + metrics.verticalSpacing + 4;
   auto drawTip = [&](const char* tip, int y) { renderer.drawCenteredText(SMALL_FONT_ID, y, tip, true); };
 
-  // Reserve the Clear Text row even when the entry is empty.
-  const int tipCount = cursorMode ? 1 : urlPanel ? 3 : symbols ? 2 : 3 + (inputType == InputType::Url ? 1 : 0);
+  // Reserve the Clear Text row even when the entry is empty. Numeric entry has no case or URL tips.
+  const int tipCount = cursorMode ? 1
+                       : urlPanel ? 3
+                       : symbols  ? 2
+                       : inputType == InputType::Numeric ? 2
+                                                         : 3 + (inputType == InputType::Url ? 1 : 0);
   const int tipsHeight = (tipCount + 1) * tipsLh;
   // Reserve cursor instructions even for an empty field; passwords need a second row.
   const int tipsTop = underlineBottom + (cursorMode ? (isPassword ? 2 : 1) * tipsLh : 0);
@@ -948,7 +974,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
       if (!text.empty()) {
         drawTip(tr(STR_KB_HINT_CLEAR_TEXT), y);
       }
-    } else if (symbols) {
+    } else if (symbols || inputType == InputType::Numeric) {
       if (!text.empty()) {
         drawTip(tr(STR_KB_HINT_CLEAR_TEXT), y);
       }

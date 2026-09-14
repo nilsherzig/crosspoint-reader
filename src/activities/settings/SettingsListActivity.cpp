@@ -1,5 +1,6 @@
 #include "SettingsListActivity.h"
 
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -17,7 +18,8 @@ namespace {
 constexpr int16_t ICON_SIZE = 32;
 // Row icons, indexed by SettingsSection.
 constexpr const freeink::Icon* SECTION_ICONS[SETTINGS_SECTION_COUNT] = {
-    &icon_settings_32, &icon_smartphone_32, &icon_book_open_32, &icon_pointer_32, &icon_library_32, &icon_wifi_32,
+    &icon_settings_32, &icon_smartphone_32, &icon_book_open_32,     &icon_pointer_32,
+    &icon_library_32,  &icon_wifi_32,      &icon_file_text_32,
 };
 }  // namespace
 
@@ -48,8 +50,17 @@ void SettingsListActivity::loop() {
 // Rebuilds row labels; call when entering and after a section returns (the
 // UI language may have changed).
 void SettingsListActivity::rebuildRows() {
+  visibleSections_.clear();
+  visibleSections_.reserve(SETTINGS_SECTION_COUNT);
   for (size_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
-    auto& item = rowItems_[i];
+    const auto section = static_cast<SettingsSection>(i);
+#if !defined(FREEINK_DEVICE_X4PRO) || !FREEINK_DEVICE_X4PRO
+    if (section == SettingsSection::Flashcards) continue;
+#else
+    if (section == SettingsSection::Flashcards && !BoardConfig::isX4Pro()) continue;
+#endif
+    visibleSections_.push_back(section);
+    auto& item = rowItems_[visibleSections_.size() - 1];
     item.label = I18N.get(SETTINGS_SECTION_TITLES[i]);
     item.icon = fui::bitmapFromIcon(*SECTION_ICONS[i]);
     item.actionValue = static_cast<int16_t>(i);
@@ -65,7 +76,7 @@ void SettingsListActivity::buildScreen(UiScreen& screen) {
 
   fui::ListProps props;
   props.items = rowItems_.data();
-  props.count = static_cast<uint16_t>(rowItems_.size());
+  props.count = static_cast<uint16_t>(visibleSections_.size());
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   // Rows are as tall as a label plus a small second line, giving the icons air.
@@ -82,11 +93,17 @@ void SettingsListActivity::activateIndex(const int index) {
   // The section screen replaces this one; a lingering flash would gray an
   // unrelated element on return.
   app.clearTapFlash();
-  openSection(static_cast<SettingsSection>(index));
+  if (index < 0 || index >= static_cast<int>(visibleSections_.size())) return;
+  openSection(visibleSections_[index]);
 }
 
 void SettingsListActivity::openSection(const SettingsSection section) {
-  nav.selected = static_cast<int>(section);
+  for (size_t i = 0; i < visibleSections_.size(); ++i) {
+    if (visibleSections_[i] == section) {
+      nav.selected = static_cast<int>(i);
+      break;
+    }
+  }
   auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section);
   if (!activity) {
     LOG_ERR("SETTINGS", "OOM: SettingsActivity");

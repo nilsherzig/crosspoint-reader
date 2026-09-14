@@ -39,6 +39,8 @@ relearning_steps_minutes = [10]
 
 This is intentionally a small TOML subset: blank lines, `#` comments, the four scalar keys, and the two integer arrays above are supported. Unknown keys, unsupported TOML syntax, and out-of-range values block studying until corrected. Valid ranges are 0–1,000 new cards, 0.70–0.99 retention, and 1–365,000 days. The learn-ahead limit accepts whole minutes from 0 to 4,294,967,295. Each learning-step array must contain 1–8 strictly increasing whole-minute values between 1 and 10,080.
 
+On the X4 Pro, these values are editable under Settings > Flashcards. Scalar values use bounded pickers; the learn-ahead limit uses a numeric keyboard and accepts whole minutes up to 4,294,967,295. Learning and relearning steps open a dedicated editor where individual ordered steps can be changed, appended, or removed. Every successful change rewrites `config.toml` in canonical key order, so comments and original formatting are not preserved. Missing files show the defaults; malformed files show the values parsed before the error and defaults for the rest, then are repaired by the next successful change. Save failures leave the displayed value unchanged and are logged.
+
 The new-card limit applies independently to each deck and UTC calendar day. A new card consumes quota when it is first displayed, not when a session is opened or when the card is first rated. Due cards are never limited. When a selected deck has no due or available new cards but still has unseen cards, a numeric picker can add a one-session allowance of 1–2,000 cards. Only cards actually displayed consume that allowance; the configured daily limit is not changed.
 
 ## Scheduling and sessions
@@ -113,4 +115,4 @@ The following implementation choices were not inherent in the original product r
 - cards are plain text; HTML, Markdown, images, tags, hints, and reverse cards are not interpreted;
 - only the fixed FSRS-6 weights and the `Again`/`Good` ratings are supported; fuzzing and learning-step delays are deterministic from card identity and review time;
 - review history is never compacted so it remains available for a future optimizer;
-- no settings UI or per-deck configuration is provided yet.
+- settings are global to the X4 Pro and are stored in `/flashcards/config.toml`; per-deck configuration is not provided.

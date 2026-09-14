@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 
 #include "SettingsSection.h"
 #include "activities/UiListActivity.h"
@@ -13,11 +14,12 @@ class SettingsListActivity final : public UiListActivity {
   SettingsSection pendingSection;
 
   std::array<freeink::ui::ListItem, SETTINGS_SECTION_COUNT> rowItems_{};
+  std::vector<SettingsSection> visibleSections_;
 
   void rebuildRows();
   void openSection(SettingsSection section);
 
-  int listCount() const override { return static_cast<int>(SETTINGS_SECTION_COUNT); }
+  int listCount() const override { return static_cast<int>(visibleSections_.size()); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onBackButton() override;
