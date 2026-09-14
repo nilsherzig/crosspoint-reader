@@ -24,6 +24,7 @@ namespace {
 constexpr char MODULE[] = "FLASH";
 constexpr char PERF_MODULE[] = "FLASHPERF";
 constexpr char CACHE_DIRECTORY[] = "/.crosspoint/flashcards";
+constexpr char CONFIG_TEMP_PATH[] = "/flashcards/config.toml.tmp";
 constexpr uint32_t CACHE_MAGIC = 0x31444346;  // FCD1
 constexpr uint16_t CACHE_VERSION = 1;
 constexpr size_t CACHE_HEADER_SIZE = 36;
@@ -813,6 +814,55 @@ bool loadCards(const char* path, const CacheHeader& header, StudyQueue& queue, s
   return true;
 }
 
+bool validLearningSteps(const LearningSteps& steps) {
+  if (steps.count == 0 || steps.count > MAX_LEARNING_STEPS) return false;
+  uint16_t previous = 0;
+  for (uint8_t i = 0; i < steps.count; ++i) {
+    if (steps.minutes[i] < 1 || steps.minutes[i] > 10080 || (i > 0 && steps.minutes[i] <= previous)) {
+      return false;
+    }
+    previous = steps.minutes[i];
+  }
+  return true;
+}
+
+bool validConfig(const Config& config) {
+  return config.newCardsPerDay <= 1000 && std::isfinite(config.desiredRetention) && config.desiredRetention >= 0.70f &&
+         config.desiredRetention <= 0.99f && config.maximumIntervalDays >= 1 && config.maximumIntervalDays <= 365000 &&
+         validLearningSteps(config.learningSteps) && validLearningSteps(config.relearningSteps);
+}
+
+bool writeUnsignedConfigLine(HalFile& file, const char* key, const uint32_t value) {
+  char line[64];
+  const int length = snprintf(line, sizeof(line), "%s = %lu\n", key, static_cast<unsigned long>(value));
+  return length > 0 && static_cast<size_t>(length) < sizeof(line) &&
+         writeExact(file, line, static_cast<size_t>(length));
+}
+
+bool writeFloatConfigLine(HalFile& file, const char* key, const float value) {
+  char line[64];
+  const int length = snprintf(line, sizeof(line), "%s = %.2f\n", key, static_cast<double>(value));
+  return length > 0 && static_cast<size_t>(length) < sizeof(line) &&
+         writeExact(file, line, static_cast<size_t>(length));
+}
+
+bool writeLearningStepsConfigLine(HalFile& file, const char* key, const LearningSteps& steps) {
+  char line[128];
+  const int prefixLength = snprintf(line, sizeof(line), "%s = [", key);
+  if (prefixLength < 0 || static_cast<size_t>(prefixLength) >= sizeof(line)) return false;
+  size_t length = static_cast<size_t>(prefixLength);
+  for (uint8_t i = 0; i < steps.count; ++i) {
+    const int valueLength = snprintf(line + length, sizeof(line) - length, "%s%u", i == 0 ? "" : ", ",
+                                     static_cast<unsigned>(steps.minutes[i]));
+    if (valueLength < 0 || static_cast<size_t>(valueLength) >= sizeof(line) - length) return false;
+    length += static_cast<size_t>(valueLength);
+  }
+  if (length + 2 >= sizeof(line)) return false;
+  line[length++] = ']';
+  line[length++] = '\n';
+  return writeExact(file, line, length);
+}
+
 }  // namespace
 
 Fingerprint FlashcardStore::fingerprint(const std::string& front, const std::string& back) {
@@ -910,6 +960,66 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
     if (value == '\n') ++lineNumber;
   }
   LOG_DBG(MODULE, "Config loaded: new=%u retention=%.2f max_interval=%lu learn_steps=%u relearn_steps=%u",
+          static_cast<unsigned>(config.newCardsPerDay), static_cast<double>(config.desiredRetention),
+          static_cast<unsigned long>(config.maximumIntervalDays), static_cast<unsigned>(config.learningSteps.count),
+          static_cast<unsigned>(config.relearningSteps.count));
+  perf.markSuccess();
+  return true;
+}
+
+bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
+  PerfTrace perf("save_config");
+  error.clear();
+  if (!validConfig(config)) {
+    error = "Config contains out-of-range values";
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  if (!Storage.exists(SOURCE_DIRECTORY) && !Storage.mkdir(SOURCE_DIRECTORY, true)) {
+    error = "Could not create flashcard directory";
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  if (Storage.exists(CONFIG_TEMP_PATH) && !Storage.remove(CONFIG_TEMP_PATH)) {
+    error = "Could not remove temporary config";
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+
+  HalFile file;
+  if (!Storage.openFileForWrite(MODULE, CONFIG_TEMP_PATH, file)) {
+    error = "Could not open temporary config";
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  bool written = writeUnsignedConfigLine(file, "new_cards_per_day", config.newCardsPerDay);
+  written = written && writeUnsignedConfigLine(file, "learn_ahead_limit_minutes", config.learnAheadLimitMinutes);
+  written = written && writeFloatConfigLine(file, "desired_retention", config.desiredRetention);
+  written = written && writeUnsignedConfigLine(file, "maximum_interval_days", config.maximumIntervalDays);
+  written = written && writeLearningStepsConfigLine(file, "learning_steps_minutes", config.learningSteps);
+  written = written && writeLearningStepsConfigLine(file, "relearning_steps_minutes", config.relearningSteps);
+  file.flush();
+  const bool closed = file.close();
+  if (!written || !closed) {
+    error = "Could not write config.toml";
+    Storage.remove(CONFIG_TEMP_PATH);
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+
+  if (Storage.exists(CONFIG_PATH) && !Storage.remove(CONFIG_PATH)) {
+    error = "Could not replace config.toml";
+    Storage.remove(CONFIG_TEMP_PATH);
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  if (!Storage.rename(CONFIG_TEMP_PATH, CONFIG_PATH)) {
+    error = "Could not install config.toml";
+    Storage.remove(CONFIG_TEMP_PATH);
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  LOG_DBG(MODULE, "Config saved: new=%u retention=%.2f max_interval=%lu learn_steps=%u relearn_steps=%u",
           static_cast<unsigned>(config.newCardsPerDay), static_cast<double>(config.desiredRetention),
           static_cast<unsigned long>(config.maximumIntervalDays), static_cast<unsigned>(config.learningSteps.count),
           static_cast<unsigned>(config.relearningSteps.count));

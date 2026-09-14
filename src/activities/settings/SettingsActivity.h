@@ -1,5 +1,10 @@
 #pragma once
+#include <BoardConfig.h>
 #include <I18n.h>
+
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include <FlashcardStore.h>
+#endif
 
 #include <functional>
 #include <string>
@@ -26,6 +31,12 @@ enum class SettingAction {
   DownloadFonts,
   TextSettings,
   KeyboardLayouts,
+  FlashcardNewCardsPerDay,
+  FlashcardLearnAheadLimit,
+  FlashcardDesiredRetention,
+  FlashcardMaximumInterval,
+  FlashcardLearningSteps,
+  FlashcardRelearningSteps,
 };
 
 struct SettingInfo {
@@ -160,7 +171,12 @@ class SettingsActivity final : public UiTabListActivity {
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
   std::vector<SettingInfo> systemSettings;
+  std::vector<SettingInfo> flashcardSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
+
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  flashcards::Config flashcardConfig;
+#endif
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
@@ -177,13 +193,16 @@ class SettingsActivity final : public UiTabListActivity {
   std::vector<freeink::ui::ListItem> rowItems_;
   void rebuildRowItems();
 
-  static constexpr int categoryCount = 4;
-  static constexpr StrId categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                         StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+  static constexpr int baseCategoryCount = 4;
+  static constexpr int maxCategoryCount = 5;
+  static constexpr StrId categoryNames[maxCategoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
+                                                            StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM,
+                                                            StrId::STR_CAT_FLASHCARDS};
+  int categoryCount() const;
 
   // --- UiTabListActivity contract ---
   int listCount() const override { return settingsCount; }
-  int tabCount() const override { return categoryCount; }
+  int tabCount() const override { return categoryCount(); }
   int activeTab() const override { return selectedCategoryIndex; }
   const char* tabLabel(int index) const override { return I18N.get(categoryNames[index]); }
   void buildScreen(UiScreen& screen) override;
@@ -193,7 +212,8 @@ class SettingsActivity final : public UiTabListActivity {
   bool handleButtons() override;
   bool handleCustomInput() override;
 
-  static std::string settingValueText(const SettingInfo& setting);
+  std::string settingValueText(const SettingInfo& setting) const;
+  std::string flashcardSettingValueText(SettingAction action) const;
   void selectCategory(int categoryIndex);
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 
@@ -201,6 +221,12 @@ class SettingsActivity final : public UiTabListActivity {
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
   void rebuildLibraryIndex();
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  void openFlashcardNumericPicker(SettingAction action);
+  void openFlashcardLearnAheadEditor();
+  void openFlashcardStepsEditor(bool relearning);
+  bool saveFlashcardConfig(const flashcards::Config& config);
+#endif
   void rebuildSettingsLists();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
