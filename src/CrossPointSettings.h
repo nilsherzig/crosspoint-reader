@@ -102,6 +102,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_BUTTONS_DISABLED = 2,
     NEXT_NEXT = 3,
     PREV_PREV = 4,
+    BOTH_NEXT_HOLD_PREV = 5,
     SIDE_BUTTON_LAYOUT_COUNT
   };
 

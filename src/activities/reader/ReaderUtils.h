@@ -60,6 +60,7 @@ struct PageTurnResult {
   bool prev;
   bool next;
   bool fromTilt;
+  bool singlePageOnly;
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
@@ -73,14 +74,23 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
-  const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
+
+  const bool sharedSideButtons = SETTINGS.sideButtonLayout == CrossPointSettings::BOTH_NEXT_HOLD_PREV;
+  const bool sharedSideHold =
+      sharedSideButtons && (input.wasLongPressed(MappedInputManager::Button::Up, SKIP_HOLD_MS) ||
+                            input.wasLongPressed(MappedInputManager::Button::Down, SKIP_HOLD_MS));
+  const bool sharedSideRelease =
+      sharedSideButtons && !sharedSideHold &&
+      (input.wasReleased(MappedInputManager::Button::Up) || input.wasReleased(MappedInputManager::Button::Down));
+
+  const bool prev = tiltPrev || sharedSideHold || pageButtonTriggered(MappedInputManager::Button::PageBack) ||
+                    pageButtonTriggered(prevButton);
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
+  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext || sharedSideRelease ||
                     pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
                     pageButtonTriggered(nextButton);
-  return {prev, next, tiltPrev || tiltNext};
+  return {prev, next, tiltPrev || tiltNext, sharedSideHold};
 }
 
 struct TouchPageTurn {
