@@ -205,7 +205,7 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   const auto& theme = screen.theme();
   screen.setContentMargin(fui::Insets{theme.spaceMd, theme.spaceLg, theme.spaceMd, theme.spaceLg});
   screen.header(deck.name.c_str(), nullptr, undoIndicatorUntil != 0 ? tr(STR_FLASHCARD_UNDONE) : progressText);
-  screen.spacer(theme.spaceLg);
+  screen.spacer(theme.spaceLg * 2);
 
   if (phase == Phase::Complete) {
     fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
