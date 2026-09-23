@@ -39,6 +39,9 @@ struct Config {
   UndoBinding undoBinding = UndoBinding::TouchAndSides;
   uint8_t fontPointSize = 12;
   bool showForecast = false;
+  bool showReviewCount = true;
+
+  constexpr bool needsReviewCount() const { return showReviewCount || showForecast; }
 };
 
 struct DeckSummary {
