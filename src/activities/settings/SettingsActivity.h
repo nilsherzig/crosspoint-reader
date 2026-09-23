@@ -45,7 +45,7 @@ enum class SettingAction {
   FlashcardRelearningSteps,
   FlashcardUndoBinding,
   FlashcardFontSize,
-  FlashcardForecast,
+  FlashcardDisplaySettings,
 };
 
 struct SettingInfo {

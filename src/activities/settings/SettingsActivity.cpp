@@ -36,6 +36,7 @@
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/flashcards/FlashcardDisplaySettingsActivity.h"
 #include "activities/flashcards/FlashcardStepsActivity.h"
 #endif
 #include "activities/network/WifiSelectionActivity.h"
@@ -215,7 +216,8 @@ void SettingsActivity::rebuildSettings() {
         makeFlashcardSetting(StrId::STR_FLASHCARD_RELEARNING_STEPS, SettingAction::FlashcardRelearningSteps));
     settings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_UNDO_BINDING, SettingAction::FlashcardUndoBinding));
     settings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_FONT_SIZE, SettingAction::FlashcardFontSize));
-    settings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_SHOW_FORECAST, SettingAction::FlashcardForecast));
+    settings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_DISPLAY_SETTINGS, SettingAction::FlashcardDisplaySettings));
   }
 #endif
   rebuildRowItems();
@@ -511,10 +513,13 @@ void SettingsActivity::toggleSelectedSetting() {
         requestUpdate();
         break;
       }
-      case SettingAction::FlashcardForecast: {
-        flashcards::Config updated = flashcardConfig;
-        updated.showForecast = !updated.showForecast;
-        saveFlashcardConfig(updated);
+      case SettingAction::FlashcardDisplaySettings: {
+        auto activity = makeUniqueNoThrow<FlashcardDisplaySettingsActivity>(renderer, mappedInput);
+        if (!activity) {
+          LOG_ERR("SETTINGS", "OOM: flashcard display settings");
+          return;
+        }
+        startActivityForResult(std::move(activity), [this](const ActivityResult&) { rebuildSettings(); });
         break;
       }
       case SettingAction::FlashcardUndoBinding: {
@@ -729,8 +734,6 @@ std::string SettingsActivity::flashcardSettingValueText(const SettingAction acti
       snprintf(value, sizeof(value), tr(STR_FLASHCARD_POINT_SIZE_FORMAT),
                static_cast<unsigned>(flashcardConfig.fontPointSize));
       return value;
-    case SettingAction::FlashcardForecast:
-      return flashcardConfig.showForecast ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case SettingAction::FlashcardUndoBinding: {
       static constexpr StrId options[] = {
           StrId::STR_FLASHCARD_UNDO_TOUCH_AND_SIDES, StrId::STR_FLASHCARD_UNDO_TOUCH,
