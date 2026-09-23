@@ -8,6 +8,17 @@
 
 namespace flashcards {
 
+enum class UndoBinding : uint8_t { TouchAndSides, Touch, BothSides, SideUp, SideDown, Disabled };
+
+inline constexpr uint8_t CARD_FONT_POINT_SIZES[] = {12, 14, 16, 18};
+
+constexpr bool validCardFontPointSize(const uint8_t size) {
+  for (const uint8_t supported : CARD_FONT_POINT_SIZES) {
+    if (size == supported) return true;
+  }
+  return false;
+}
+
 struct Fingerprint {
   uint64_t first = 0;
   uint64_t second = 0;
@@ -25,6 +36,9 @@ struct Config {
   uint32_t maximumIntervalDays = 36500;
   LearningSteps learningSteps{{1, 10}, 2};
   LearningSteps relearningSteps{{10}, 1};
+  UndoBinding undoBinding = UndoBinding::TouchAndSides;
+  uint8_t fontPointSize = 12;
+  bool showForecast = false;
 };
 
 struct DeckSummary {
@@ -63,6 +77,8 @@ struct StudyQueue {
   std::vector<uint16_t> newCards;
   uint16_t introducedToday = 0;
   uint16_t unseenCount = 0;
+  uint32_t reviewCount = 0;
+  int32_t firstReviewDay = -1;
 };
 
 class FlashcardStore {
@@ -82,6 +98,7 @@ class FlashcardStore {
   static bool introduceCard(const DeckSummary& deck, StudyCard& card, int64_t now, std::string& error);
   static bool reviewCard(const DeckSummary& deck, StudyCard& card, int64_t now, Rating rating, const Config& config,
                          std::string& error);
+  static bool undoReview(const DeckSummary& deck, StudyCard& card, const StudyCard& previous, std::string& error);
 
   static Fingerprint fingerprint(const std::string& front, const std::string& back);
 };
