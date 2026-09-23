@@ -99,6 +99,12 @@ TEST(FsrsScheduler, AppliesShortTermStepAtZeroElapsedDays) {
 
 TEST(StudyQueueBuilder, LearnAheadDefaultsToTwentyMinutes) {
   EXPECT_EQ(flashcards::Config{}.learnAheadLimitMinutes, 20u);
+  EXPECT_EQ(flashcards::Config{}.undoBinding, flashcards::UndoBinding::TouchAndSides);
+  EXPECT_EQ(flashcards::Config{}.fontPointSize, 12);
+  EXPECT_FALSE(flashcards::Config{}.showForecast);
+  EXPECT_TRUE(flashcards::validCardFontPointSize(12));
+  EXPECT_TRUE(flashcards::validCardFontPointSize(18));
+  EXPECT_FALSE(flashcards::validCardFontPointSize(13));
 }
 
 TEST(StudyQueueBuilder, LearnAheadOnlyAfterBaseCardsAreExhausted) {

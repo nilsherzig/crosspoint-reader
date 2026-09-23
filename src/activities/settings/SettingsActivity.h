@@ -40,6 +40,9 @@ enum class SettingAction {
   FlashcardMaximumInterval,
   FlashcardLearningSteps,
   FlashcardRelearningSteps,
+  FlashcardUndoBinding,
+  FlashcardFontSize,
+  FlashcardForecast,
 };
 
 struct SettingInfo {

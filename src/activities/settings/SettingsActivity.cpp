@@ -150,7 +150,7 @@ void SettingsActivity::rebuildSettingsLists() {
     if (!flashcards::FlashcardStore::loadConfig(flashcardConfig, error)) {
       LOG_ERR("SETTINGS", "Could not load flashcard settings: %s", error.c_str());
     }
-    flashcardSettings.reserve(6);
+    flashcardSettings.reserve(9);
     flashcardSettings.push_back(
         makeFlashcardSetting(StrId::STR_FLASHCARD_NEW_CARDS_PER_DAY, SettingAction::FlashcardNewCardsPerDay));
     flashcardSettings.push_back(
@@ -163,6 +163,11 @@ void SettingsActivity::rebuildSettingsLists() {
         makeFlashcardSetting(StrId::STR_FLASHCARD_LEARNING_STEPS, SettingAction::FlashcardLearningSteps));
     flashcardSettings.push_back(
         makeFlashcardSetting(StrId::STR_FLASHCARD_RELEARNING_STEPS, SettingAction::FlashcardRelearningSteps));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_UNDO_BINDING, SettingAction::FlashcardUndoBinding));
+    flashcardSettings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_FONT_SIZE, SettingAction::FlashcardFontSize));
+    flashcardSettings.push_back(
+        makeFlashcardSetting(StrId::STR_FLASHCARD_SHOW_FORECAST, SettingAction::FlashcardForecast));
   }
 #endif
 
@@ -543,6 +548,45 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::FlashcardRelearningSteps:
         openFlashcardStepsEditor(true);
         break;
+      case SettingAction::FlashcardFontSize: {
+        char labels[std::size(flashcards::CARD_FONT_POINT_SIZES)][16];
+        const char* options[std::size(flashcards::CARD_FONT_POINT_SIZES)];
+        int selected = 0;
+        for (size_t i = 0; i < std::size(flashcards::CARD_FONT_POINT_SIZES); ++i) {
+          snprintf(labels[i], sizeof(labels[i]), tr(STR_FLASHCARD_POINT_SIZE_FORMAT),
+                   static_cast<unsigned>(flashcards::CARD_FONT_POINT_SIZES[i]));
+          options[i] = labels[i];
+          if (flashcards::CARD_FONT_POINT_SIZES[i] == flashcardConfig.fontPointSize) selected = static_cast<int>(i);
+        }
+        optionPopup.show(tr(STR_FLASHCARD_FONT_SIZE), options, static_cast<int>(std::size(options)), selected,
+                         [this](const int index) {
+                           flashcards::Config updated = flashcardConfig;
+                           updated.fontPointSize = flashcards::CARD_FONT_POINT_SIZES[index];
+                           saveFlashcardConfig(updated);
+                         });
+        requestUpdate();
+        break;
+      }
+      case SettingAction::FlashcardForecast: {
+        flashcards::Config updated = flashcardConfig;
+        updated.showForecast = !updated.showForecast;
+        saveFlashcardConfig(updated);
+        break;
+      }
+      case SettingAction::FlashcardUndoBinding: {
+        static constexpr StrId options[] = {
+            StrId::STR_FLASHCARD_UNDO_TOUCH_AND_SIDES, StrId::STR_FLASHCARD_UNDO_TOUCH,
+            StrId::STR_FLASHCARD_UNDO_BOTH_SIDES,      StrId::STR_FLASHCARD_UNDO_SIDE_UP,
+            StrId::STR_FLASHCARD_UNDO_SIDE_DOWN,       StrId::STR_FLASHCARD_UNDO_DISABLED};
+        optionPopup.show(setting.nameId, options, static_cast<int>(std::size(options)),
+                         static_cast<int>(flashcardConfig.undoBinding), [this](const int index) {
+                           flashcards::Config updated = flashcardConfig;
+                           updated.undoBinding = static_cast<flashcards::UndoBinding>(index);
+                           saveFlashcardConfig(updated);
+                         });
+        requestUpdate();
+        break;
+      }
 #endif
       case SettingAction::None:
         // Do nothing
@@ -778,6 +822,19 @@ std::string SettingsActivity::flashcardSettingValueText(const SettingAction acti
       return formatFlashcardSteps(flashcardConfig.learningSteps);
     case SettingAction::FlashcardRelearningSteps:
       return formatFlashcardSteps(flashcardConfig.relearningSteps);
+    case SettingAction::FlashcardFontSize:
+      snprintf(value, sizeof(value), tr(STR_FLASHCARD_POINT_SIZE_FORMAT),
+               static_cast<unsigned>(flashcardConfig.fontPointSize));
+      return value;
+    case SettingAction::FlashcardForecast:
+      return flashcardConfig.showForecast ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case SettingAction::FlashcardUndoBinding: {
+      static constexpr StrId options[] = {
+          StrId::STR_FLASHCARD_UNDO_TOUCH_AND_SIDES, StrId::STR_FLASHCARD_UNDO_TOUCH,
+          StrId::STR_FLASHCARD_UNDO_BOTH_SIDES,      StrId::STR_FLASHCARD_UNDO_SIDE_UP,
+          StrId::STR_FLASHCARD_UNDO_SIDE_DOWN,       StrId::STR_FLASHCARD_UNDO_DISABLED};
+      return I18N.get(options[static_cast<uint8_t>(flashcardConfig.undoBinding)]);
+    }
     default:
       return "";
   }

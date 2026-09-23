@@ -17,6 +17,7 @@
 
 #include "CsvReader.h"
 #include "FlashcardConfigParser.h"
+#include "ReviewCount.h"
 #include "StudyQueueBuilder.h"
 
 namespace flashcards {
@@ -31,7 +32,8 @@ constexpr size_t CACHE_HEADER_SIZE = 36;
 constexpr size_t CACHE_RECORD_SIZE = 36;
 constexpr uint32_t HISTORY_MAGIC = 0x31484346;  // FCH1
 constexpr uint16_t LEGACY_HISTORY_VERSION = 1;
-constexpr uint16_t HISTORY_VERSION = 2;
+constexpr uint16_t PHASE_HISTORY_VERSION = 2;
+constexpr uint16_t HISTORY_VERSION = 3;
 constexpr size_t HISTORY_RECORD_SIZE = 60;
 constexpr size_t BLOOM_BYTES = 8192;
 constexpr size_t IO_BUFFER_BYTES = 1024;
@@ -95,7 +97,7 @@ struct CacheHeader {
   uint32_t payloadCrc = 0;
 };
 
-enum class HistoryType : uint8_t { Introduction = 1, Review = 2 };
+enum class HistoryType : uint8_t { Introduction = 1, Review = 2, Revert = 3 };
 
 struct HistoryEvent {
   HistoryType type = HistoryType::Introduction;
@@ -238,13 +240,15 @@ void encodeHistoryEvent(const HistoryEvent& event, uint8_t* data) {
 
 bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
   const uint16_t version = getU16(data + 4);
-  if (getU32(data) != HISTORY_MAGIC || (version != LEGACY_HISTORY_VERSION && version != HISTORY_VERSION) ||
+  if (getU32(data) != HISTORY_MAGIC ||
+      (version != LEGACY_HISTORY_VERSION && version != PHASE_HISTORY_VERSION && version != HISTORY_VERSION) ||
       getU16(data + 6) != HISTORY_RECORD_SIZE || getU32(data + 56) != crc32(data, 56)) {
     return false;
   }
   event.type = static_cast<HistoryType>(data[8]);
   event.rating = static_cast<Rating>(data[9]);
-  if ((event.type != HistoryType::Introduction && event.type != HistoryType::Review) ||
+  if ((event.type != HistoryType::Introduction && event.type != HistoryType::Review &&
+       !(version == HISTORY_VERSION && event.type == HistoryType::Revert)) ||
       (event.type == HistoryType::Review && event.rating != Rating::Again && event.rating != Rating::Good)) {
     return false;
   }
@@ -257,7 +261,8 @@ bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
     if (event.phase < CardPhase::New || event.phase > CardPhase::Relearning ||
         event.learningStep >= MAX_LEARNING_STEPS ||
         (event.type == HistoryType::Introduction && event.phase != CardPhase::New) ||
-        (event.type == HistoryType::Review && event.phase == CardPhase::New)) {
+        (event.type == HistoryType::Review && event.phase == CardPhase::New) ||
+        (event.type == HistoryType::Revert && event.phase == CardPhase::New && event.learningStep != 0)) {
       return false;
     }
   }
@@ -269,9 +274,10 @@ bool decodeHistoryEvent(const uint8_t* data, HistoryEvent& event) {
   event.due = getI64(data + 44);
   event.introducedDay = static_cast<int32_t>(getU32(data + 52));
   if (event.timestamp < 0 || event.due < 0 || event.introducedDay < 0) return false;
-  return event.type != HistoryType::Review || (std::isfinite(event.memory.stability) && event.memory.stability > 0.0f &&
-                                               std::isfinite(event.memory.difficulty) &&
-                                               event.memory.difficulty >= 1.0f && event.memory.difficulty <= 10.0f);
+  return (event.type != HistoryType::Review && !(event.type == HistoryType::Revert && event.phase != CardPhase::New)) ||
+         (std::isfinite(event.memory.stability) && event.memory.stability > 0.0f &&
+          std::isfinite(event.memory.difficulty) && event.memory.difficulty >= 1.0f &&
+          event.memory.difficulty <= 10.0f);
 }
 
 uint64_t fnvUpdate(uint64_t hash, const uint8_t* data, const size_t length) {
@@ -743,16 +749,24 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
     if (event.type == HistoryType::Introduction && event.introducedDay == today && queue.introducedToday < UINT16_MAX) {
       ++queue.introducedToday;
     }
+    if (event.type == HistoryType::Review || event.type == HistoryType::Revert) {
+      queue.reviewCount = detail::countAfterReviewEvent(queue.reviewCount, event.type == HistoryType::Review
+                                                                               ? detail::ReviewCountEvent::Review
+                                                                               : detail::ReviewCountEvent::Undo);
+      if (event.type == HistoryType::Review && queue.firstReviewDay < 0 && event.timestamp / 86400 <= INT32_MAX) {
+        queue.firstReviewDay = static_cast<int32_t>(event.timestamp / 86400);
+      }
+    }
     StudyCard* card = findCard(queue.cards, event.fingerprint);
     if (!card) continue;
     card->introducedDay = event.introducedDay;
-    if (event.type == HistoryType::Review) {
+    if (event.type == HistoryType::Review || event.type == HistoryType::Revert) {
       card->memory = event.memory;
       card->lastReview = event.timestamp;
       card->due = event.due;
       card->phase = event.phase;
       card->learningStep = event.learningStep;
-      card->initialized = true;
+      card->initialized = event.type == HistoryType::Review || event.phase != CardPhase::New;
     }
   }
   if (validBytes != history.fileSize64()) damagedTail = true;
@@ -829,7 +843,8 @@ bool validLearningSteps(const LearningSteps& steps) {
 bool validConfig(const Config& config) {
   return config.newCardsPerDay <= 1000 && std::isfinite(config.desiredRetention) && config.desiredRetention >= 0.70f &&
          config.desiredRetention <= 0.99f && config.maximumIntervalDays >= 1 && config.maximumIntervalDays <= 365000 &&
-         validLearningSteps(config.learningSteps) && validLearningSteps(config.relearningSteps);
+         validLearningSteps(config.learningSteps) && validLearningSteps(config.relearningSteps) &&
+         config.undoBinding <= UndoBinding::Disabled && validCardFontPointSize(config.fontPointSize);
 }
 
 bool writeUnsignedConfigLine(HalFile& file, const char* key, const uint32_t value) {
@@ -949,6 +964,14 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
         } else if (strcmp(key, "relearning_steps_minutes") == 0 &&
                    detail::parseLearningSteps(setting, config.relearningSteps)) {
           // Parsed above.
+        } else if (strcmp(key, "undo_binding") == 0 && parseUnsigned(setting, unsignedValue) &&
+                   unsignedValue <= static_cast<uint8_t>(UndoBinding::Disabled)) {
+          config.undoBinding = static_cast<UndoBinding>(unsignedValue);
+        } else if (strcmp(key, "font_point_size") == 0 && parseUnsigned(setting, unsignedValue) &&
+                   unsignedValue <= UINT8_MAX && validCardFontPointSize(static_cast<uint8_t>(unsignedValue))) {
+          config.fontPointSize = static_cast<uint8_t>(unsignedValue);
+        } else if (strcmp(key, "show_forecast") == 0 && parseUnsigned(setting, unsignedValue) && unsignedValue <= 1) {
+          config.showForecast = unsignedValue != 0;
         } else {
           error = "Invalid setting on config.toml line " + std::to_string(lineNumber);
           return false;
@@ -998,6 +1021,9 @@ bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
   written = written && writeUnsignedConfigLine(file, "maximum_interval_days", config.maximumIntervalDays);
   written = written && writeLearningStepsConfigLine(file, "learning_steps_minutes", config.learningSteps);
   written = written && writeLearningStepsConfigLine(file, "relearning_steps_minutes", config.relearningSteps);
+  written = written && writeUnsignedConfigLine(file, "undo_binding", static_cast<uint8_t>(config.undoBinding));
+  written = written && writeUnsignedConfigLine(file, "font_point_size", config.fontPointSize);
+  written = written && writeUnsignedConfigLine(file, "show_forecast", config.showForecast ? 1 : 0);
   file.flush();
   const bool closed = file.close();
   if (!written || !closed) {
@@ -1075,6 +1101,8 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
   queue.newCards.clear();
   queue.introducedToday = 0;
   queue.unseenCount = 0;
+  queue.reviewCount = 0;
+  queue.firstReviewDay = -1;
   error.clear();
   CacheHeader header;
   if (!ensureImported(deck.sourcePath.c_str(), deck.key, header, error)) return false;
@@ -1144,6 +1172,21 @@ bool FlashcardStore::introduceCard(const DeckSummary& deck, StudyCard& card, con
   card.introducedDay = today;
   LOG_DBG(MODULE, "Card introduced: deck=%s source_order=%lu day=%ld", deck.name.c_str(),
           static_cast<unsigned long>(card.sourceOrder), static_cast<long>(today));
+  return true;
+}
+
+bool FlashcardStore::undoReview(const DeckSummary& deck, StudyCard& card, const StudyCard& previous,
+                                std::string& error) {
+  if (!(card.fingerprint == previous.fingerprint) || previous.introducedDay < 0) {
+    error = "Invalid undo state";
+    LOG_ERR(MODULE, "%s", error.c_str());
+    return false;
+  }
+  const HistoryEvent event{HistoryType::Revert,   Rating::Again,        previous.phase,
+                           previous.learningStep, previous.fingerprint, previous.memory,
+                           previous.lastReview,   previous.due,         previous.introducedDay};
+  if (!appendHistory(deck.key, event, error)) return false;
+  card = previous;
   return true;
 }
 
