@@ -3,16 +3,49 @@
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
 
 #include <CrossPointSettings.h>
+#include <FlashcardTextLayout.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <ReviewCount.h>
+#include <ReviewForecast.h>
+#include <ReviewUndo.h>
 #include <StudyQueueBuilder.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
+#include <limits>
 #include <utility>
 
+#include "components/UIScale.h"
+#include "fontIds.h"
+
 namespace fui = freeink::ui;
+
+namespace {
+static constexpr StrId MONTH_NAMES[] = {
+    StrId::STR_FLASHCARD_MONTH_JAN, StrId::STR_FLASHCARD_MONTH_FEB, StrId::STR_FLASHCARD_MONTH_MAR,
+    StrId::STR_FLASHCARD_MONTH_APR, StrId::STR_FLASHCARD_MONTH_MAY, StrId::STR_FLASHCARD_MONTH_JUN,
+    StrId::STR_FLASHCARD_MONTH_JUL, StrId::STR_FLASHCARD_MONTH_AUG, StrId::STR_FLASHCARD_MONTH_SEP,
+    StrId::STR_FLASHCARD_MONTH_OCT, StrId::STR_FLASHCARD_MONTH_NOV, StrId::STR_FLASHCARD_MONTH_DEC,
+};
+
+int cardFontId(const uint8_t pointSize) {
+  switch (pointSize) {
+    case 12:
+      return UI_12_FONT_ID;
+    case 14:
+      return NOTOSANS_14_FONT_ID;
+    case 16:
+      return NOTOSANS_16_FONT_ID;
+    case 18:
+      return NOTOSANS_18_FONT_ID;
+    default:
+      return UI_12_FONT_ID;
+  }
+}
+}  // namespace
 
 FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  flashcards::DeckSummary deck, const uint16_t additionalNewCards)
@@ -30,6 +63,8 @@ void FlashcardReviewActivity::onEnter() {
   app.on(ACTION_AGAIN, &FlashcardReviewActivity::actionTrampoline, this);
   app.on(ACTION_GOOD, &FlashcardReviewActivity::actionTrampoline, this);
   app.on(ACTION_DONE, &FlashcardReviewActivity::actionTrampoline, this);
+  lastRating.valid = false;
+  undoIndicatorUntil = 0;
   app.setScreen(&FlashcardReviewActivity::screenTrampoline, this);
 
   if (!deck.valid()) {
@@ -41,6 +76,7 @@ void FlashcardReviewActivity::onEnter() {
     showError(ErrorKind::Clock, "RTC has not been synchronized");
     return;
   }
+  currentUtcDay = static_cast<int32_t>(now / 86400);
   std::string detail;
   if (!flashcards::FlashcardStore::loadConfig(config, detail)) {
     showError(ErrorKind::Config, detail);
@@ -73,6 +109,8 @@ void FlashcardReviewActivity::onEnter() {
 
 void FlashcardReviewActivity::onExit() {
   LOG_DBG("FLASH", "Study session closing: deck=%s phase=%s", deck.name.c_str(), phaseName());
+  lastRating.valid = false;
+  undoIndicatorUntil = 0;
   queue = flashcards::StudyQueue{};
   pendingLearningCards = std::vector<uint16_t>{};
   frontText.clear();
@@ -92,6 +130,24 @@ void FlashcardReviewActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
+  }
+
+  if (undoIndicatorUntil != 0 && static_cast<int32_t>(millis() - undoIndicatorUntil) >= 0) {
+    undoIndicatorUntil = 0;
+    requestUpdate();
+  }
+
+  if (lastRating.valid && phase != Phase::Error) {
+    int x = 0;
+    int y = 0;
+    if ((undoTouchEnabled() && mappedInput.wasScreenLongPress(x, y)) ||
+        (undoSideEnabled(MappedInputManager::Button::Up) &&
+         mappedInput.wasLongPressed(MappedInputManager::Button::Up, 700)) ||
+        (undoSideEnabled(MappedInputManager::Button::Down) &&
+         mappedInput.wasLongPressed(MappedInputManager::Button::Down, 700))) {
+      undo();
+      return;
+    }
   }
 
   if (phase == Phase::Waiting && millis() - lastDueCheck >= 1000) {
@@ -148,16 +204,55 @@ void FlashcardReviewActivity::render(RenderLock&&) {
 void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   const auto& theme = screen.theme();
   screen.setContentMargin(fui::Insets{theme.spaceMd, theme.spaceLg, theme.spaceMd, theme.spaceLg});
-  screen.header(deck.name.c_str(), nullptr, progressText);
+  screen.header(deck.name.c_str(), nullptr, undoIndicatorUntil != 0 ? tr(STR_FLASHCARD_UNDONE) : progressText);
   screen.spacer(theme.spaceMd);
 
-  if (phase == Phase::Complete || phase == Phase::Error || phase == Phase::Waiting) {
+  if (phase == Phase::Complete) {
     fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
     screen.footer(done, 1);
-    const char* message = phase == Phase::Complete  ? tr(STR_FLASHCARD_SESSION_COMPLETE)
-                          : phase == Phase::Waiting ? waitingText
-                                                    : errorText();
-    screen.centeredText(message, theme.bodyText);
+
+    char totalText[64];
+    snprintf(totalText, sizeof(totalText), tr(STR_FLASHCARD_TOTAL_REVIEWS), static_cast<unsigned>(queue.reviewCount));
+    char forecastText[64]{};
+    if (config.showForecast) {
+      const int64_t projectedDay = flashcards::detail::projectedIntroductionDay(
+          queue.firstReviewDay, currentUtcDay, static_cast<uint32_t>(queue.cards.size()), queue.unseenCount,
+          queue.reviewCount);
+      if (projectedDay >= 0 && projectedDay <= std::numeric_limits<time_t>::max() / 86400) {
+        const time_t targetTime = static_cast<time_t>(projectedDay * 86400);
+        struct tm targetDate;
+        if (gmtime_r(&targetTime, &targetDate) && targetDate.tm_mon >= 0 && targetDate.tm_mon < 12) {
+          snprintf(forecastText, sizeof(forecastText), tr(STR_FLASHCARD_FORECAST), I18N[MONTH_NAMES[targetDate.tm_mon]],
+                   targetDate.tm_year + 1900);
+        }
+      }
+    }
+    const fui::Rect body = screen.body();
+    fui::TextStyle titleStyle = theme.titleText;
+    titleStyle.align = fui::TextAlign::Center;
+    fui::TextStyle countStyle = theme.bodyText;
+    countStyle.align = fui::TextAlign::Center;
+    const int16_t titleHeight = screen.target().lineHeight(titleStyle.font);
+    const int16_t countHeight = screen.target().lineHeight(countStyle.font);
+    const int16_t forecastHeight = forecastText[0] != '\0' ? countHeight : 0;
+    const int16_t totalHeight = static_cast<int16_t>(titleHeight + theme.spaceMd + countHeight +
+                                                     (forecastHeight > 0 ? theme.spaceMd + forecastHeight : 0));
+    const int16_t titleY = static_cast<int16_t>(body.y + std::max(0, (body.height - totalHeight) / 2));
+    const int16_t countY = static_cast<int16_t>(titleY + titleHeight + theme.spaceMd);
+    screen.target().text(fui::Rect{body.x, titleY, body.width, titleHeight}, tr(STR_FLASHCARD_SESSION_COMPLETE),
+                         titleStyle);
+    screen.target().text(fui::Rect{body.x, countY, body.width, countHeight}, totalText, countStyle);
+    if (forecastHeight > 0) {
+      screen.target().text(
+          fui::Rect{body.x, static_cast<int16_t>(countY + countHeight + theme.spaceMd), body.width, forecastHeight},
+          forecastText, countStyle);
+    }
+    return;
+  }
+  if (phase == Phase::Error || phase == Phase::Waiting) {
+    fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
+    screen.footer(done, 1);
+    screen.centeredText(phase == Phase::Waiting ? waitingText : errorText(), theme.bodyText);
     return;
   }
 
@@ -170,37 +265,58 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   }
 
   const fui::Rect body = screen.body();
-  const int16_t sectionGap = theme.spaceLg;
-  const int16_t sectionHeight = std::max<int16_t>(0, static_cast<int16_t>(body.height - sectionGap)) / 2;
-  const fui::Rect questionRect{body.x, body.y, body.width, sectionHeight};
-  const fui::Rect answerRect{body.x, static_cast<int16_t>(questionRect.bottom() + sectionGap), body.width,
-                             static_cast<int16_t>(body.bottom() - questionRect.bottom() - sectionGap)};
+  // The adapter has three font slots. Rebind the title slot only while painting
+  // card text, leaving the already-drawn header/footer at the theme's UI size.
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_TITLE, cardFontId(config.fontPointSize));
+  const int16_t lineHeight = screen.target().lineHeight(fui::GfxRendererTarget::FONT_TITLE);
+  fui::TextStyle textStyle = theme.bodyText;
+  textStyle.font = fui::GfxRendererTarget::FONT_TITLE;
+  textStyle.bold = false;
+  textStyle.align = fui::TextAlign::Left;
 
-  // The question keeps the same rectangle and style before and after reveal so it never jumps between refreshes.
-  fui::TextStyle questionStyle = theme.titleText;
-  questionStyle.bold = false;
-  const int16_t questionLineHeight = screen.target().lineHeight(questionStyle.font);
-  questionStyle.align = fui::TextAlign::Left;
-  questionStyle.maxLines = static_cast<uint8_t>(
-      std::clamp<int>(questionLineHeight > 0 ? questionRect.height / questionLineHeight : 1, 1, 255));
-  screen.target().text(questionRect, frontText.c_str(), questionStyle);
+  const int preferredGap = theme.spaceLg;
+  const int gap = std::min(preferredGap, std::max(0, body.height - 2 * lineHeight));
+  const int maxQuestionHeight = std::max(0, body.height - gap) / 2;
+  textStyle.maxLines = flashcards::detail::cardTextLines(maxQuestionHeight, lineHeight);
+  const int measuredQuestionHeight =
+      textStyle.maxLines > 0 ? fui::measureWrappedText(screen.target(), frontText.c_str(), textStyle, body.width).height
+                             : 0;
+  const auto layout =
+      flashcards::detail::cardTextLayout(body.height, preferredGap, lineHeight, measuredQuestionHeight + theme.spaceMd);
+  const fui::Rect questionRect{body.x, body.y, body.width, layout.questionHeight};
+  const fui::Rect answerRect{body.x, static_cast<int16_t>(questionRect.bottom() + layout.gap), body.width,
+                             layout.answerHeight};
+  const auto drawCardText = [&](const fui::Rect rect, const char* text, const bool topAligned) {
+    textStyle.maxLines = flashcards::detail::cardTextLines(rect.height, lineHeight);
+    if (textStyle.maxLines == 0 || rect.width <= 0) return;
+    int16_t nextLineY = rect.y;
+    fui::layoutText(screen.target(), rect, text, textStyle, [&](const char* line, fui::Rect lineRect) {
+      if (topAligned) {
+        lineRect.y = nextLineY;
+        nextLineY = static_cast<int16_t>(nextLineY + lineRect.height);
+      }
+      fui::TextStyle lineStyle = textStyle;
+      lineStyle.maxLines = 1;
+      screen.target().text(lineRect, line, lineStyle);
+    });
+  };
+  drawCardText(questionRect, frontText.c_str(), false);
+
+  if (answerShown) {
+    if (layout.gap > 0 && layout.answerHeight > 0) {
+      const int16_t separatorY = static_cast<int16_t>(questionRect.bottom() + layout.gap / 2);
+      screen.target().line(fui::Point{body.x, separatorY},
+                           fui::Point{static_cast<int16_t>(body.right() - 1), separatorY},
+                           std::max<uint8_t>(theme.headerUnderline, 1), fui::Paint::solid(theme.bodyText.color));
+    }
+    drawCardText(answerRect, backText.c_str(), true);
+  }
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_TITLE, uiScaleSpec().titleFontId);
 
   if (!answerShown) {
     screen.frame().hit(body, ACTION_REVEAL, 0, fui::InputTouch);
     return;
   }
-
-  const int16_t separatorY = static_cast<int16_t>(questionRect.bottom() + sectionGap / 2);
-  screen.target().line(fui::Point{body.x, separatorY}, fui::Point{static_cast<int16_t>(body.right() - 1), separatorY},
-                       std::max<uint8_t>(theme.headerUnderline, 1), fui::Paint::solid(theme.bodyText.color));
-
-  fui::TextStyle answerStyle = theme.bodyText;
-  const int16_t answerLineHeight = screen.target().lineHeight(answerStyle.font);
-  answerStyle.align = fui::TextAlign::Left;
-  answerStyle.maxLines =
-      static_cast<uint8_t>(std::clamp<int>(answerLineHeight > 0 ? answerRect.height / answerLineHeight : 1, 1, 255));
-  screen.target().text(answerRect, backText.c_str(), answerStyle);
-
   const int16_t leftWidth = body.width / 2;
   screen.frame().hit(fui::Rect{body.x, body.y, leftWidth, body.height}, ACTION_AGAIN, 0, fui::InputTouch);
   screen.frame().hit(fui::Rect{static_cast<int16_t>(body.x + leftWidth), body.y,
@@ -247,12 +363,68 @@ void FlashcardReviewActivity::rate(const flashcards::Rating rating) {
     showError(ErrorKind::Clock, "RTC read failed during review");
     return;
   }
+  const LastRating previous{queue.cards[currentCardIndex],
+                            phase,
+                            duePosition,
+                            newPosition,
+                            currentPendingPosition,
+                            currentCardIndex,
+                            currentFromPending,
+                            true};
   std::string detail;
   if (!flashcards::FlashcardStore::reviewCard(deck, queue.cards[currentCardIndex], now, rating, config, detail)) {
     showError(ErrorKind::Save, detail);
     return;
   }
+  queue.reviewCount =
+      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Review);
+  if (queue.firstReviewDay < 0) queue.firstReviewDay = static_cast<int32_t>(now / 86400);
+  lastRating = previous;
+  undoIndicatorUntil = 0;
   advance();
+}
+
+bool FlashcardReviewActivity::undoTouchEnabled() const {
+  return config.undoBinding == flashcards::UndoBinding::TouchAndSides ||
+         config.undoBinding == flashcards::UndoBinding::Touch;
+}
+
+bool FlashcardReviewActivity::undoSideEnabled(const MappedInputManager::Button button) const {
+  return config.undoBinding == flashcards::UndoBinding::TouchAndSides ||
+         config.undoBinding == flashcards::UndoBinding::BothSides ||
+         (button == MappedInputManager::Button::Up && config.undoBinding == flashcards::UndoBinding::SideUp) ||
+         (button == MappedInputManager::Button::Down && config.undoBinding == flashcards::UndoBinding::SideDown);
+}
+
+void FlashcardReviewActivity::undo() {
+  if (!lastRating.valid || phase == Phase::Error) return;
+  const auto ratedPhase = queue.cards[lastRating.cardIndex].phase;
+  std::string detail;
+  if (!flashcards::FlashcardStore::undoReview(deck, queue.cards[lastRating.cardIndex], lastRating.card, detail)) {
+    showError(ErrorKind::Save, detail);
+    return;
+  }
+  flashcards::detail::restorePendingAfterUndo(
+      pendingLearningCards, lastRating.cardIndex, lastRating.pendingPosition, lastRating.fromPending,
+      ratedPhase == flashcards::CardPhase::Learning || ratedPhase == flashcards::CardPhase::Relearning);
+  queue.reviewCount =
+      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Undo);
+  phase = lastRating.phase;
+  duePosition = lastRating.duePosition;
+  newPosition = lastRating.newPosition;
+  currentFromPending = lastRating.fromPending;
+  currentPendingPosition = lastRating.pendingPosition;
+  currentCardIndex = lastRating.cardIndex;
+  lastRating.valid = false;
+  undoIndicatorUntil = millis() + 1500;
+  int64_t now = 0;
+  if (!halClock.getUnixTime(now)) {
+    showError(ErrorKind::Clock, "RTC read failed while undoing review");
+    return;
+  }
+  if (!loadCard(now)) return;
+  LOG_DBG("FLASH", "Last rating undone: source_order=%lu",
+          static_cast<unsigned long>(queue.cards[currentCardIndex].sourceOrder));
 }
 
 void FlashcardReviewActivity::advance() {
@@ -278,6 +450,7 @@ bool FlashcardReviewActivity::loadCurrentCard() {
     showError(ErrorKind::Clock, "RTC read failed while loading card");
     return false;
   }
+  currentUtcDay = static_cast<int32_t>(now / 86400);
 
   const bool baseCardsRemaining = duePosition < queue.dueCards.size() || newPosition < queue.newCards.size();
   const size_t learningPosition = flashcards::detail::nextLearningCardPosition(
@@ -324,8 +497,13 @@ bool FlashcardReviewActivity::loadCard(const int64_t now) {
   LOG_DBG("FLASH", "Loading card: phase=%s source=%s source_order=%lu", phaseName(),
           currentFromPending ? "learning" : "base", static_cast<unsigned long>(card.sourceOrder));
   std::string detail;
-  if (!flashcards::FlashcardStore::introduceCard(deck, card, now, detail) ||
-      !flashcards::FlashcardStore::readCardText(deck, card, false, frontText, detail)) {
+  const bool newlyIntroduced = card.introducedDay < 0;
+  if (!flashcards::FlashcardStore::introduceCard(deck, card, now, detail)) {
+    showError(ErrorKind::Save, detail);
+    return false;
+  }
+  if (newlyIntroduced && queue.unseenCount > 0) --queue.unseenCount;
+  if (!flashcards::FlashcardStore::readCardText(deck, card, false, frontText, detail)) {
     showError(ErrorKind::Save, detail);
     return false;
   }

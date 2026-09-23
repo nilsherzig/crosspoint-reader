@@ -41,6 +41,9 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   void reveal();
   void rate(flashcards::Rating rating);
   void advance();
+  void undo();
+  bool undoTouchEnabled() const;
+  bool undoSideEnabled(MappedInputManager::Button button) const;
   bool loadCurrentCard();
   bool loadCard(int64_t now);
   void showWaiting(int64_t now);
@@ -63,8 +66,20 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   uint32_t lastDueCheck = 0;
   uint16_t currentCardIndex = 0;
   uint16_t additionalNewCards = 0;
+  int32_t currentUtcDay = -1;
   bool currentFromPending = false;
   bool answerShown = false;
+  struct LastRating {
+    flashcards::StudyCard card;
+    Phase phase = Phase::Due;
+    size_t duePosition = 0;
+    size_t newPosition = 0;
+    size_t pendingPosition = 0;
+    uint16_t cardIndex = 0;
+    bool fromPending = false;
+    bool valid = false;
+  } lastRating;
+  uint32_t undoIndicatorUntil = 0;
   std::string frontText;
   std::string backText;
   char progressText[32]{};

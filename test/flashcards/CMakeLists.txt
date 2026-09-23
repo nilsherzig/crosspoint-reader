@@ -1,6 +1,10 @@
 add_executable(flashcards_tests
   CardSchedulerBehaviorTests.cpp
   FlashcardsTests.cpp
+  FlashcardTextLayoutTests.cpp
+  ReviewCountTests.cpp
+  ReviewForecastTests.cpp
+  ReviewUndoTests.cpp
   StudyQueueBuilderBehaviorTests.cpp
   ${REPO_ROOT}/lib/Flashcards/CardScheduler.cpp
   ${REPO_ROOT}/lib/Flashcards/CsvReader.cpp
