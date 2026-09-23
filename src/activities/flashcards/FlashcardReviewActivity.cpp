@@ -205,7 +205,7 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   const auto& theme = screen.theme();
   screen.setContentMargin(fui::Insets{theme.spaceMd, theme.spaceLg, theme.spaceMd, theme.spaceLg});
   screen.header(deck.name.c_str(), nullptr, undoIndicatorUntil != 0 ? tr(STR_FLASHCARD_UNDONE) : progressText);
-  screen.spacer(theme.spaceMd);
+  screen.spacer(theme.spaceLg);
 
   if (phase == Phase::Complete) {
     fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
@@ -311,9 +311,9 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
   if (answerShown) {
     if (layout.gap > 0 && layout.answerHeight > 0) {
       const int16_t separatorY = static_cast<int16_t>(questionRect.bottom() + layout.gap / 2);
-      screen.target().line(fui::Point{body.x, separatorY},
-                           fui::Point{static_cast<int16_t>(body.right() - 1), separatorY},
-                           std::max<uint8_t>(theme.headerUnderline, 1), fui::Paint::solid(theme.bodyText.color));
+      screen.target().fill(
+          fui::Rect{body.x, separatorY, body.width, static_cast<int16_t>(std::max<uint8_t>(theme.headerUnderline, 1))},
+          fui::Paint::dither(fui::Color::LightGray));
     }
     drawCardText(answerRect, backText.c_str(), true);
   }
