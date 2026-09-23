@@ -211,8 +211,10 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
     fui::FooterAction done[] = {{tr(STR_DONE), ACTION_DONE}};
     screen.footer(done, 1);
 
-    char totalText[64];
-    snprintf(totalText, sizeof(totalText), tr(STR_FLASHCARD_TOTAL_REVIEWS), static_cast<unsigned>(queue.reviewCount));
+    char totalText[64]{};
+    if (config.showReviewCount) {
+      snprintf(totalText, sizeof(totalText), tr(STR_FLASHCARD_TOTAL_REVIEWS), static_cast<unsigned>(queue.reviewCount));
+    }
     char forecastText[64]{};
     if (config.showForecast) {
       const int64_t projectedDay = flashcards::detail::projectedIntroductionDay(
@@ -235,17 +237,21 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
     const int16_t titleHeight = screen.target().lineHeight(titleStyle.font);
     const int16_t countHeight = screen.target().lineHeight(countStyle.font);
     const int16_t forecastHeight = forecastText[0] != '\0' ? countHeight : 0;
-    const int16_t totalHeight = static_cast<int16_t>(titleHeight + theme.spaceMd + countHeight +
-                                                     (forecastHeight > 0 ? theme.spaceMd + forecastHeight : 0));
+    const int16_t totalHeight =
+        static_cast<int16_t>(titleHeight + (config.showReviewCount ? theme.spaceMd + countHeight : 0) +
+                             (forecastHeight > 0 ? theme.spaceMd + forecastHeight : 0));
     const int16_t titleY = static_cast<int16_t>(body.y + std::max(0, (body.height - totalHeight) / 2));
-    const int16_t countY = static_cast<int16_t>(titleY + titleHeight + theme.spaceMd);
     screen.target().text(fui::Rect{body.x, titleY, body.width, titleHeight}, tr(STR_FLASHCARD_SESSION_COMPLETE),
                          titleStyle);
-    screen.target().text(fui::Rect{body.x, countY, body.width, countHeight}, totalText, countStyle);
+    int16_t nextY = static_cast<int16_t>(titleY + titleHeight);
+    if (config.showReviewCount) {
+      nextY = static_cast<int16_t>(nextY + theme.spaceMd);
+      screen.target().text(fui::Rect{body.x, nextY, body.width, countHeight}, totalText, countStyle);
+      nextY = static_cast<int16_t>(nextY + countHeight);
+    }
     if (forecastHeight > 0) {
-      screen.target().text(
-          fui::Rect{body.x, static_cast<int16_t>(countY + countHeight + theme.spaceMd), body.width, forecastHeight},
-          forecastText, countStyle);
+      nextY = static_cast<int16_t>(nextY + theme.spaceMd);
+      screen.target().text(fui::Rect{body.x, nextY, body.width, forecastHeight}, forecastText, countStyle);
     }
     return;
   }
@@ -376,9 +382,11 @@ void FlashcardReviewActivity::rate(const flashcards::Rating rating) {
     showError(ErrorKind::Save, detail);
     return;
   }
-  queue.reviewCount =
-      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Review);
-  if (queue.firstReviewDay < 0) queue.firstReviewDay = static_cast<int32_t>(now / 86400);
+  if (config.needsReviewCount()) {
+    queue.reviewCount =
+        flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Review);
+  }
+  if (config.showForecast && queue.firstReviewDay < 0) queue.firstReviewDay = static_cast<int32_t>(now / 86400);
   lastRating = previous;
   undoIndicatorUntil = 0;
   advance();
@@ -407,8 +415,10 @@ void FlashcardReviewActivity::undo() {
   flashcards::detail::restorePendingAfterUndo(
       pendingLearningCards, lastRating.cardIndex, lastRating.pendingPosition, lastRating.fromPending,
       ratedPhase == flashcards::CardPhase::Learning || ratedPhase == flashcards::CardPhase::Relearning);
-  queue.reviewCount =
-      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Undo);
+  if (config.needsReviewCount()) {
+    queue.reviewCount =
+        flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Undo);
+  }
   phase = lastRating.phase;
   duePosition = lastRating.duePosition;
   newPosition = lastRating.newPosition;

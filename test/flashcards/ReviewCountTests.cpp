@@ -1,5 +1,5 @@
+#include <FlashcardStore.h>
 #include <ReviewCount.h>
-
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -21,6 +21,17 @@ TEST(ReviewCount, UndoRemovesOneRatingAndReratingCountsOnce) {
   count = flashcards::detail::countAfterReviewEvent(count, ReviewCountEvent::Undo);
   count = flashcards::detail::countAfterReviewEvent(count, ReviewCountEvent::Review);
   EXPECT_EQ(count, 10u);
+}
+
+TEST(ReviewCount, DisplayOptionsOnlyTrackCountWhenNeeded) {
+  flashcards::Config config;
+  EXPECT_TRUE(config.needsReviewCount());
+  config.showReviewCount = false;
+  EXPECT_FALSE(config.needsReviewCount());
+  config.showForecast = true;
+  EXPECT_TRUE(config.needsReviewCount());
+  config.showReviewCount = true;
+  EXPECT_TRUE(config.needsReviewCount());
 }
 
 TEST(ReviewCount, BoundsCorruptHistoryAndOverflow) {

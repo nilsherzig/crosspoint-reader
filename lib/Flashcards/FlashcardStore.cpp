@@ -718,7 +718,8 @@ bool appendHistory(const uint64_t key, const HistoryEvent& event, std::string& e
   return true;
 }
 
-bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, std::string& error) {
+bool replayHistory(const uint64_t key, const int32_t today, const bool trackReviewCount, const bool trackForecast,
+                   StudyQueue& queue, std::string& error) {
   PerfTrace perf("replay_history");
   char path[96];
   makeHistoryPath(key, path, sizeof(path));
@@ -750,10 +751,13 @@ bool replayHistory(const uint64_t key, const int32_t today, StudyQueue& queue, s
       ++queue.introducedToday;
     }
     if (event.type == HistoryType::Review || event.type == HistoryType::Revert) {
-      queue.reviewCount = detail::countAfterReviewEvent(queue.reviewCount, event.type == HistoryType::Review
-                                                                               ? detail::ReviewCountEvent::Review
-                                                                               : detail::ReviewCountEvent::Undo);
-      if (event.type == HistoryType::Review && queue.firstReviewDay < 0 && event.timestamp / 86400 <= INT32_MAX) {
+      if (trackReviewCount) {
+        queue.reviewCount = detail::countAfterReviewEvent(queue.reviewCount, event.type == HistoryType::Review
+                                                                                 ? detail::ReviewCountEvent::Review
+                                                                                 : detail::ReviewCountEvent::Undo);
+      }
+      if (trackForecast && event.type == HistoryType::Review && queue.firstReviewDay < 0 &&
+          event.timestamp / 86400 <= INT32_MAX) {
         queue.firstReviewDay = static_cast<int32_t>(event.timestamp / 86400);
       }
     }
@@ -972,6 +976,9 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
           config.fontPointSize = static_cast<uint8_t>(unsignedValue);
         } else if (strcmp(key, "show_forecast") == 0 && parseUnsigned(setting, unsignedValue) && unsignedValue <= 1) {
           config.showForecast = unsignedValue != 0;
+        } else if (strcmp(key, "show_review_count") == 0 && parseUnsigned(setting, unsignedValue) &&
+                   unsignedValue <= 1) {
+          config.showReviewCount = unsignedValue != 0;
         } else {
           error = "Invalid setting on config.toml line " + std::to_string(lineNumber);
           return false;
@@ -1024,6 +1031,7 @@ bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
   written = written && writeUnsignedConfigLine(file, "undo_binding", static_cast<uint8_t>(config.undoBinding));
   written = written && writeUnsignedConfigLine(file, "font_point_size", config.fontPointSize);
   written = written && writeUnsignedConfigLine(file, "show_forecast", config.showForecast ? 1 : 0);
+  written = written && writeUnsignedConfigLine(file, "show_review_count", config.showReviewCount ? 1 : 0);
   file.flush();
   const bool closed = file.close();
   if (!written || !closed) {
@@ -1119,7 +1127,7 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
   }
 
   const int32_t today = static_cast<int32_t>(now / 86400);
-  if (!replayHistory(deck.key, today, queue, error)) return false;
+  if (!replayHistory(deck.key, today, config.needsReviewCount(), config.showForecast, queue, error)) return false;
   queue.unseenCount = detail::buildStudyQueues(queue.cards, now, today, queue.introducedToday, config.newCardsPerDay,
                                                additionalNewCards, queue.dueCards, queue.newCards);
   LOG_DBG(MODULE, "Queue ready: deck=%s cards=%u due=%u new=%u unseen=%u introduced_today=%u extra_new=%u",
