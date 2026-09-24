@@ -18,6 +18,8 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
  public:
   FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, flashcards::DeckSummary deck,
                           uint16_t additionalNewCards = 0);
+  FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, flashcards::DeckSummary deck,
+                          flashcards::Config config, flashcards::StudyQueue queue, uint16_t additionalNewCards);
 
   void onEnter() override;
   void onExit() override;
@@ -71,6 +73,7 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   bool currentFromPending = false;
   bool answerShown = false;
   bool backupTrackingReady = false;
+  bool preparedQueue = false;
   struct LastRating {
     flashcards::StudyCard card;
     Phase phase = Phase::Due;

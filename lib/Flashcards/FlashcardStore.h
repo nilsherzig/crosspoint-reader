@@ -55,6 +55,7 @@ struct DeckSummary {
   std::string error;
   uint64_t key = 0;
   uint32_t cardCount = 0;
+  bool cardCountAvailable = false;
   uint16_t dueCount = 0;
   uint16_t newCount = 0;
   uint16_t unseenCount = 0;
@@ -87,6 +88,9 @@ struct StudyQueue {
   uint16_t unseenCount = 0;
   uint32_t reviewCount = 0;
   int32_t firstReviewDay = -1;
+  int32_t snapshotDay = -1;
+  uint64_t historyBytes = 0;
+  bool snapshotDirty = false;
 };
 
 class FlashcardStore {
@@ -98,7 +102,7 @@ class FlashcardStore {
 
   static bool loadConfig(Config& config, std::string& error);
   static bool saveConfig(const Config& config, std::string& error);
-  static bool scanDecks(std::vector<DeckSummary>& decks);
+  static bool scanDecks(std::vector<DeckSummary>& decks, bool importMissing = true);
   static bool loadStudyQueue(const DeckSummary& deck, int64_t now, const Config& config, StudyQueue& queue,
                              std::string& error, uint16_t additionalNewCards = 0);
   static bool readCardText(const DeckSummary& deck, const StudyCard& card, bool back, std::string& text,
@@ -107,6 +111,8 @@ class FlashcardStore {
   static bool reviewCard(const DeckSummary& deck, StudyCard& card, int64_t now, Rating rating, const Config& config,
                          std::string& error);
   static bool undoReview(const DeckSummary& deck, StudyCard& card, const StudyCard& previous, std::string& error);
+  static bool saveStudySnapshot(const DeckSummary& deck, StudyQueue& queue);
+  static void noteHistoryAppend(StudyQueue& queue);
 
   static Fingerprint fingerprint(const std::string& front, const std::string& back);
 };
