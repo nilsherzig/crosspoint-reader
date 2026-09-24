@@ -56,6 +56,17 @@ FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedIn
       deck(std::move(deck)),
       additionalNewCards(additionalNewCards) {}
 
+FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                 flashcards::DeckSummary deck, flashcards::Config config,
+                                                 flashcards::StudyQueue queue, const uint16_t additionalNewCards)
+    : Activity("FlashcardReview", renderer, mappedInput),
+      UiAppHost(renderer),
+      deck(std::move(deck)),
+      config(std::move(config)),
+      queue(std::move(queue)),
+      additionalNewCards(additionalNewCards),
+      preparedQueue(true) {}
+
 void FlashcardReviewActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG("FLASH", "Study session opening: deck=%s cards=%lu", deck.name.c_str(),
@@ -80,13 +91,23 @@ void FlashcardReviewActivity::onEnter() {
   }
   currentUtcDay = static_cast<int32_t>(now / 86400);
   std::string detail;
-  if (!flashcards::FlashcardStore::loadConfig(config, detail)) {
-    showError(ErrorKind::Config, detail);
-    return;
-  }
-  if (!flashcards::FlashcardStore::loadStudyQueue(deck, now, config, queue, detail, additionalNewCards)) {
-    showError(ErrorKind::Deck, detail);
-    return;
+  if (preparedQueue) {
+    if (queue.snapshotDay != currentUtcDay) {
+      queue.snapshotDay = currentUtcDay;
+      queue.introducedToday = 0;
+    }
+    queue.unseenCount =
+        flashcards::detail::buildStudyQueues(queue.cards, now, currentUtcDay, queue.introducedToday,
+                                             config.newCardsPerDay, additionalNewCards, queue.dueCards, queue.newCards);
+  } else {
+    if (!flashcards::FlashcardStore::loadConfig(config, detail)) {
+      showError(ErrorKind::Config, detail);
+      return;
+    }
+    if (!flashcards::FlashcardStore::loadStudyQueue(deck, now, config, queue, detail, additionalNewCards)) {
+      showError(ErrorKind::Deck, detail);
+      return;
+    }
   }
   backupTrackingReady = config.backupEnabled;
   pendingLearningCards.reserve(queue.cards.size());
@@ -112,6 +133,9 @@ void FlashcardReviewActivity::onEnter() {
 
 void FlashcardReviewActivity::onExit() {
   LOG_DBG("FLASH", "Study session closing: deck=%s phase=%s", deck.name.c_str(), phaseName());
+  if (!flashcards::FlashcardStore::saveStudySnapshot(deck, queue)) {
+    LOG_ERR("FLASH", "Could not save study snapshot for %s", deck.name.c_str());
+  }
   if (backupTrackingReady) {
     // This also runs when Home replaces the activity without popping to the deck list.
     auto state = makeUniqueNoThrow<flashcards::FlashcardBackupState>();
@@ -359,6 +383,15 @@ void FlashcardReviewActivity::handleAction(const fui::ActionId action) {
 void FlashcardReviewActivity::finishSession() {
   ActivityResult result;
   result.isCancelled = phase != Phase::Complete;
+  int64_t now = 0;
+  if (phase != Phase::Error && !queue.cards.empty() && halClock.getUnixTime(now)) {
+    const int32_t today = static_cast<int32_t>(now / 86400);
+    const uint16_t introducedToday = queue.snapshotDay == today ? queue.introducedToday : 0;
+    const uint16_t unseen = flashcards::detail::buildStudyQueues(
+        queue.cards, now, today, introducedToday, config.newCardsPerDay, 0, queue.dueCards, queue.newCards);
+    result.data = FlashcardCountsResult{static_cast<uint16_t>(queue.dueCards.size()),
+                                        static_cast<uint16_t>(queue.newCards.size()), unseen};
+  }
   setResult(std::move(result));
   finish();
 }
@@ -402,11 +435,10 @@ void FlashcardReviewActivity::rate(const flashcards::Rating rating) {
     showError(ErrorKind::Save, detail);
     return;
   }
-  if (config.needsReviewCount()) {
-    queue.reviewCount =
-        flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Review);
-  }
-  if (config.showForecast && queue.firstReviewDay < 0) queue.firstReviewDay = static_cast<int32_t>(now / 86400);
+  flashcards::FlashcardStore::noteHistoryAppend(queue);
+  queue.reviewCount =
+      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Review);
+  if (queue.firstReviewDay < 0) queue.firstReviewDay = static_cast<int32_t>(now / 86400);
   lastRating = previous;
   undoIndicatorUntil = 0;
   advance();
@@ -435,10 +467,9 @@ void FlashcardReviewActivity::undo() {
   flashcards::detail::restorePendingAfterUndo(
       pendingLearningCards, lastRating.cardIndex, lastRating.pendingPosition, lastRating.fromPending,
       ratedPhase == flashcards::CardPhase::Learning || ratedPhase == flashcards::CardPhase::Relearning);
-  if (config.needsReviewCount()) {
-    queue.reviewCount =
-        flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Undo);
-  }
+  flashcards::FlashcardStore::noteHistoryAppend(queue);
+  queue.reviewCount =
+      flashcards::detail::countAfterReviewEvent(queue.reviewCount, flashcards::detail::ReviewCountEvent::Undo);
   phase = lastRating.phase;
   duePosition = lastRating.duePosition;
   newPosition = lastRating.newPosition;
@@ -531,6 +562,15 @@ bool FlashcardReviewActivity::loadCard(const int64_t now) {
   if (!flashcards::FlashcardStore::introduceCard(deck, card, now, detail)) {
     showError(ErrorKind::Save, detail);
     return false;
+  }
+  if (newlyIntroduced) {
+    flashcards::FlashcardStore::noteHistoryAppend(queue);
+    const int32_t today = static_cast<int32_t>(now / 86400);
+    if (queue.snapshotDay != today) {
+      queue.snapshotDay = today;
+      queue.introducedToday = 0;
+    }
+    if (queue.introducedToday < UINT16_MAX) ++queue.introducedToday;
   }
   if (newlyIntroduced && queue.unseenCount > 0) --queue.unseenCount;
   if (!flashcards::FlashcardStore::readCardText(deck, card, false, frontText, detail)) {

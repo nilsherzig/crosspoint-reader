@@ -36,6 +36,12 @@ struct IntervalResult {
   uint32_t value = 0;
 };
 
+struct FlashcardCountsResult {
+  uint16_t due = 0;
+  uint16_t fresh = 0;
+  uint16_t unseen = 0;
+};
+
 struct PageResult {
   uint32_t page = 0;
 };
@@ -67,9 +73,9 @@ struct FilePathResult {
   std::string path;
 };
 
-using ResultVariant =
-    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   IntervalResult, FlashcardCountsResult, PageResult, ProgressChangeResult,
+                                   NetworkModeResult, FootnoteResult, FilePathResult>;
 
 struct ActivityResult {
   bool isCancelled = false;
