@@ -103,7 +103,7 @@ void FlashcardDeckListActivity::buildScreen(UiScreen& screen) {
   props.inputMask = fui::InputTouch;
   props.subtitleText = screen.theme().smallText;
   props.subtitleText.maxLines = 1;
-  syncListViewport(screen, props, true);
+  syncListViewport(screen, props);
   screen.list(props);
 }
 
