@@ -19,6 +19,7 @@
 #include "CsvReader.h"
 #include "FlashcardConfigParser.h"
 #include "ReviewCount.h"
+#include "SnapshotIntegrity.h"
 #include "StudyQueueBuilder.h"
 
 namespace flashcards {
@@ -37,8 +38,8 @@ constexpr uint16_t PHASE_HISTORY_VERSION = 2;
 constexpr uint16_t HISTORY_VERSION = 3;
 constexpr size_t HISTORY_RECORD_SIZE = 60;
 constexpr uint32_t SNAPSHOT_MAGIC = 0x31534346;  // FCS1
-constexpr uint16_t SNAPSHOT_VERSION = 1;
-constexpr size_t SNAPSHOT_HEADER_SIZE = 48;
+constexpr uint16_t SNAPSHOT_VERSION = 2;
+constexpr size_t SNAPSHOT_HEADER_SIZE = 52;
 constexpr size_t SNAPSHOT_RECORD_SIZE = 48;
 constexpr size_t BLOOM_BYTES = 8192;
 constexpr size_t IO_BUFFER_BYTES = 1024;
@@ -159,15 +160,8 @@ void putFloat(uint8_t* data, const float value) {
   putU32(data, bits);
 }
 
-uint32_t updateCrc(uint32_t crc, const uint8_t* data, const size_t length) {
-  for (size_t i = 0; i < length; ++i) {
-    crc ^= data[i];
-    for (uint8_t bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
-  }
-  return crc;
-}
-
-uint32_t crc32(const uint8_t* data, const size_t length) { return updateCrc(0xFFFFFFFFU, data, length) ^ 0xFFFFFFFFU; }
+using detail::crc32;
+using detail::updateCrc;
 
 bool readExact(serialization::BufferedFileReader& reader, void* data, const size_t length) {
   return reader.read(data, length) == length;
@@ -599,7 +593,8 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
     return false;
   }
 
-  CacheHeader header{sourceSize, fatDate, fatTime, cardCount, cardCount * CACHE_RECORD_SIZE, textBytes, 0};
+  CacheHeader header{sourceSize, fatDate, fatTime, cardCount, static_cast<uint32_t>(cardCount * CACHE_RECORD_SIZE),
+                     textBytes,  0};
   HalFile finalFile;
   if (!Storage.openFileForWrite(MODULE, finalPath, finalFile)) {
     error = "Could not create deck cache";
@@ -757,6 +752,7 @@ void encodeSnapshotHeader(const CacheHeader& cache, const StudyQueue& queue, con
   putU32(data + 36, queue.reviewCount);
   putU32(data + 40, static_cast<uint32_t>(queue.firstReviewDay));
   putU32(data + 44, recordsCrc);
+  putU32(data + 48, detail::snapshotHeaderChecksum(data));
 }
 
 bool snapshotHistoryBoundary(const uint64_t key, const uint64_t offset, uint32_t& boundary) {
@@ -771,7 +767,7 @@ bool snapshotHistoryBoundary(const uint64_t key, const uint64_t offset, uint32_t
   if (offset == 0) return true;
   uint8_t data[HISTORY_RECORD_SIZE];
   if (!history.seek64(offset - HISTORY_RECORD_SIZE) || history.read(data, sizeof(data)) != sizeof(data)) return false;
-  boundary = crc32(data, sizeof(data));
+  boundary = detail::historyBoundaryFingerprint(data);
   return true;
 }
 
@@ -784,7 +780,8 @@ bool loadStudySnapshot(const uint64_t key, const CacheHeader& cacheHeader, const
   uint8_t header[SNAPSHOT_HEADER_SIZE];
   if (file.read(header, sizeof(header)) != sizeof(header) || getU32(header) != SNAPSHOT_MAGIC ||
       getU16(header + 4) != SNAPSHOT_VERSION || getU16(header + 6) != SNAPSHOT_HEADER_SIZE ||
-      getU32(header + 8) != cacheHeader.payloadCrc || getU32(header + 12) != queue.cards.size() ||
+      getU32(header + 48) != detail::snapshotHeaderChecksum(header) || getU32(header + 8) != cacheHeader.payloadCrc ||
+      getU32(header + 12) != queue.cards.size() ||
       file.fileSize64() != SNAPSHOT_HEADER_SIZE + queue.cards.size() * SNAPSHOT_RECORD_SIZE)
     return false;
   const uint64_t historyBytes = getU64(header + 16);
@@ -1361,11 +1358,11 @@ bool FlashcardStore::saveStudySnapshot(const DeckSummary& deck, StudyQueue& queu
   uint32_t crc = 0xFFFFFFFFU;
   for (const auto& card : queue.cards) {
     encodeSnapshotCard(card, data);
-    if (!written || !writeExact(file, data, sizeof(data))) {
+    if (!written || !writeExact(file, data, SNAPSHOT_RECORD_SIZE)) {
       written = false;
       break;
     }
-    crc = updateCrc(crc, data, sizeof(data));
+    crc = updateCrc(crc, data, SNAPSHOT_RECORD_SIZE);
   }
   encodeSnapshotHeader(cacheHeader, queue, boundary, crc ^ 0xFFFFFFFFU, data);
   written = written && file.seek(0) && writeExact(file, data, sizeof(data));
