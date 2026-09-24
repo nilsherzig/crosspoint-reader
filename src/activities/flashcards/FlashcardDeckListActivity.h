@@ -24,7 +24,6 @@ class FlashcardDeckListActivity final : public UiListActivity {
 
  private:
   void openReview(size_t index, uint16_t additionalNewCards);
-  void refreshDeckCounts(size_t index);
   void maybePromptBackup();
   void updateSubtitle(size_t index);
 
@@ -32,6 +31,8 @@ class FlashcardDeckListActivity final : public UiListActivity {
   std::vector<std::string> subtitles;
   std::vector<freeink::ui::ListItem> listItems;
   flashcards::Config config;
+  flashcards::StudyQueue preparedQueue;
+  bool hasPreparedQueue = false;
   bool countsReady = false;
 };
 

@@ -36,6 +36,10 @@ constexpr uint16_t LEGACY_HISTORY_VERSION = 1;
 constexpr uint16_t PHASE_HISTORY_VERSION = 2;
 constexpr uint16_t HISTORY_VERSION = 3;
 constexpr size_t HISTORY_RECORD_SIZE = 60;
+constexpr uint32_t SNAPSHOT_MAGIC = 0x31534346;  // FCS1
+constexpr uint16_t SNAPSHOT_VERSION = 1;
+constexpr size_t SNAPSHOT_HEADER_SIZE = 48;
+constexpr size_t SNAPSHOT_RECORD_SIZE = 48;
 constexpr size_t BLOOM_BYTES = 8192;
 constexpr size_t IO_BUFFER_BYTES = 1024;
 constexpr size_t MAX_CARD_TEXT_BYTES = 16384;
@@ -304,6 +308,11 @@ void makeCachePath(const uint64_t key, char* path, const size_t size) {
 
 void makeHistoryPath(const uint64_t key, char* path, const size_t size) {
   snprintf(path, size, "%s/%016llx.history", CACHE_DIRECTORY, static_cast<unsigned long long>(key));
+}
+
+void makeSnapshotPath(const uint64_t key, char* path, const size_t size, const bool temporary = false) {
+  snprintf(path, size, "%s/%016llx.state%s", CACHE_DIRECTORY, static_cast<unsigned long long>(key),
+           temporary ? ".tmp" : "");
 }
 
 bool hasCsvExtension(const char* name) {
@@ -719,11 +728,108 @@ bool appendHistory(const uint64_t key, const HistoryEvent& event, std::string& e
   return true;
 }
 
-bool replayHistory(const uint64_t key, const int32_t today, const bool trackReviewCount, const bool trackForecast,
-                   StudyQueue& queue, std::string& error) {
+void encodeSnapshotCard(const StudyCard& card, uint8_t* data) {
+  memset(data, 0, SNAPSHOT_RECORD_SIZE);
+  putU64(data, card.fingerprint.first);
+  putU64(data + 8, card.fingerprint.second);
+  putFloat(data + 16, card.memory.stability);
+  putFloat(data + 20, card.memory.difficulty);
+  putU64(data + 24, static_cast<uint64_t>(card.lastReview));
+  putU64(data + 32, static_cast<uint64_t>(card.due));
+  putU32(data + 40, static_cast<uint32_t>(card.introducedDay));
+  data[44] = static_cast<uint8_t>(card.phase);
+  data[45] = card.learningStep;
+  data[46] = card.initialized ? 1 : 0;
+}
+
+void encodeSnapshotHeader(const CacheHeader& cache, const StudyQueue& queue, const uint32_t boundary,
+                          const uint32_t recordsCrc, uint8_t* data) {
+  memset(data, 0, SNAPSHOT_HEADER_SIZE);
+  putU32(data, SNAPSHOT_MAGIC);
+  putU16(data + 4, SNAPSHOT_VERSION);
+  putU16(data + 6, SNAPSHOT_HEADER_SIZE);
+  putU32(data + 8, cache.payloadCrc);
+  putU32(data + 12, static_cast<uint32_t>(queue.cards.size()));
+  putU64(data + 16, queue.historyBytes);
+  putU32(data + 24, boundary);
+  putU32(data + 28, static_cast<uint32_t>(queue.snapshotDay));
+  putU16(data + 32, queue.introducedToday);
+  putU32(data + 36, queue.reviewCount);
+  putU32(data + 40, static_cast<uint32_t>(queue.firstReviewDay));
+  putU32(data + 44, recordsCrc);
+}
+
+bool snapshotHistoryBoundary(const uint64_t key, const uint64_t offset, uint32_t& boundary) {
+  boundary = 0;
+  char path[96];
+  makeHistoryPath(key, path, sizeof(path));
+  if (!Storage.exists(path)) return offset == 0;
+  HalFile history;
+  if (!Storage.openFileForRead(MODULE, path, history) || history.fileSize64() < offset ||
+      offset % HISTORY_RECORD_SIZE != 0)
+    return false;
+  if (offset == 0) return true;
+  uint8_t data[HISTORY_RECORD_SIZE];
+  if (!history.seek64(offset - HISTORY_RECORD_SIZE) || history.read(data, sizeof(data)) != sizeof(data)) return false;
+  boundary = crc32(data, sizeof(data));
+  return true;
+}
+
+bool loadStudySnapshot(const uint64_t key, const CacheHeader& cacheHeader, const int32_t today, StudyQueue& queue) {
+  char path[96];
+  makeSnapshotPath(key, path, sizeof(path));
+  if (!Storage.exists(path)) return false;
+  HalFile file;
+  if (!Storage.openFileForRead(MODULE, path, file)) return false;
+  uint8_t header[SNAPSHOT_HEADER_SIZE];
+  if (file.read(header, sizeof(header)) != sizeof(header) || getU32(header) != SNAPSHOT_MAGIC ||
+      getU16(header + 4) != SNAPSHOT_VERSION || getU16(header + 6) != SNAPSHOT_HEADER_SIZE ||
+      getU32(header + 8) != cacheHeader.payloadCrc || getU32(header + 12) != queue.cards.size() ||
+      file.fileSize64() != SNAPSHOT_HEADER_SIZE + queue.cards.size() * SNAPSHOT_RECORD_SIZE)
+    return false;
+  const uint64_t historyBytes = getU64(header + 16);
+  uint32_t boundary = 0;
+  if (!snapshotHistoryBoundary(key, historyBytes, boundary) || boundary != getU32(header + 24)) return false;
+
+  uint32_t crc = 0xFFFFFFFFU;
+  uint8_t data[SNAPSHOT_RECORD_SIZE];
+  for (const auto& card : queue.cards) {
+    if (file.read(data, sizeof(data)) != sizeof(data) || getU64(data) != card.fingerprint.first ||
+        getU64(data + 8) != card.fingerprint.second || data[44] < static_cast<uint8_t>(CardPhase::New) ||
+        data[44] > static_cast<uint8_t>(CardPhase::Relearning) || data[45] >= MAX_LEARNING_STEPS || data[46] > 1 ||
+        getI64(data + 24) < 0 || getI64(data + 32) < 0 || static_cast<int32_t>(getU32(data + 40)) < -1)
+      return false;
+    crc = updateCrc(crc, data, sizeof(data));
+  }
+  if ((crc ^ 0xFFFFFFFFU) != getU32(header + 44) || !file.seek(SNAPSHOT_HEADER_SIZE)) return false;
+  for (auto& card : queue.cards) {
+    if (file.read(data, sizeof(data)) != sizeof(data)) return false;
+    card.memory = {getFloat(data + 16), getFloat(data + 20)};
+    card.lastReview = getI64(data + 24);
+    card.due = getI64(data + 32);
+    card.introducedDay = static_cast<int32_t>(getU32(data + 40));
+    card.phase = static_cast<CardPhase>(data[44]);
+    card.learningStep = data[45];
+    card.initialized = data[46] != 0;
+  }
+  queue.historyBytes = historyBytes;
+  queue.snapshotDay = today;
+  queue.introducedToday = static_cast<int32_t>(getU32(header + 28)) == today ? getU16(header + 32) : 0;
+  queue.reviewCount = getU32(header + 36);
+  queue.firstReviewDay = static_cast<int32_t>(getU32(header + 40));
+  LOG_DBG(MODULE, "Study snapshot loaded: deck=%016llx history_bytes=%llu", static_cast<unsigned long long>(key),
+          static_cast<unsigned long long>(historyBytes));
+  return true;
+}
+
+bool replayHistory(const uint64_t key, const CacheHeader& cacheHeader, const int32_t today, StudyQueue& queue,
+                   std::string& error) {
   PerfTrace perf("replay_history");
   char path[96];
   makeHistoryPath(key, path, sizeof(path));
+  const bool restored = loadStudySnapshot(key, cacheHeader, today, queue);
+  queue.snapshotDirty = !restored;
+  if (!restored) queue.snapshotDay = today;
   if (!Storage.exists(path)) {
     LOG_DBG(MODULE, "No review history: deck=%016llx", static_cast<unsigned long long>(key));
     perf.markSuccess();
@@ -735,9 +841,13 @@ bool replayHistory(const uint64_t key, const int32_t today, const bool trackRevi
     error = "Could not read review history";
     return false;
   }
+  if (!history.seek64(queue.historyBytes)) {
+    error = "Could not seek review history";
+    return false;
+  }
   serialization::BufferedFileReader reader(history, IO_BUFFER_BYTES);
   uint8_t data[HISTORY_RECORD_SIZE];
-  size_t validBytes = 0;
+  uint64_t validBytes = queue.historyBytes;
   uint32_t recordCount = 0;
   bool damagedTail = false;
   while (reader.read(data, sizeof(data)) == sizeof(data)) {
@@ -752,13 +862,10 @@ bool replayHistory(const uint64_t key, const int32_t today, const bool trackRevi
       ++queue.introducedToday;
     }
     if (event.type == HistoryType::Review || event.type == HistoryType::Revert) {
-      if (trackReviewCount) {
-        queue.reviewCount = detail::countAfterReviewEvent(queue.reviewCount, event.type == HistoryType::Review
-                                                                                 ? detail::ReviewCountEvent::Review
-                                                                                 : detail::ReviewCountEvent::Undo);
-      }
-      if (trackForecast && event.type == HistoryType::Review && queue.firstReviewDay < 0 &&
-          event.timestamp / 86400 <= INT32_MAX) {
+      queue.reviewCount = detail::countAfterReviewEvent(queue.reviewCount, event.type == HistoryType::Review
+                                                                               ? detail::ReviewCountEvent::Review
+                                                                               : detail::ReviewCountEvent::Undo);
+      if (event.type == HistoryType::Review && queue.firstReviewDay < 0 && event.timestamp / 86400 <= INT32_MAX) {
         queue.firstReviewDay = static_cast<int32_t>(event.timestamp / 86400);
       }
     }
@@ -775,6 +882,8 @@ bool replayHistory(const uint64_t key, const int32_t today, const bool trackRevi
     }
   }
   if (validBytes != history.fileSize64()) damagedTail = true;
+  queue.historyBytes = validBytes;
+  if (recordCount > 0 || damagedTail) queue.snapshotDirty = true;
   if (!damagedTail) {
     LOG_DBG(MODULE, "History replayed: deck=%016llx records=%lu bytes=%u", static_cast<unsigned long long>(key),
             static_cast<unsigned long>(recordCount), static_cast<unsigned>(validBytes));
@@ -1123,7 +1232,7 @@ bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
   return true;
 }
 
-bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks) {
+bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks, const bool importMissing) {
   PerfTrace perf("scan_decks");
   LOG_DBG(MODULE, "Deck scan started: directory=%s", SOURCE_DIRECTORY);
   decks.clear();
@@ -1150,7 +1259,23 @@ bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks) {
     deck.sourcePath = std::string(SOURCE_DIRECTORY) + "/" + fileName;
     deck.key = deckKey(fileName);
     CacheHeader header;
-    if (ensureImported(deck.sourcePath.c_str(), deck.key, header, deck.error)) deck.cardCount = header.cardCount;
+    if (importMissing) {
+      if (ensureImported(deck.sourcePath.c_str(), deck.key, header, deck.error)) {
+        deck.cardCount = header.cardCount;
+        deck.cardCountAvailable = true;
+      }
+    } else {
+      uint64_t size = 0;
+      uint16_t date = 0;
+      uint16_t time = 0;
+      makeCachePath(deck.key, fileName, sizeof(fileName));
+      if (getSourceMetadata(deck.sourcePath.c_str(), size, date, time) && Storage.exists(fileName) &&
+          readCacheHeader(fileName, header) && header.sourceSize == size && header.fatDate == date &&
+          header.fatTime == time) {
+        deck.cardCount = header.cardCount;
+        deck.cardCountAvailable = true;
+      }
+    }
     LOG_DBG(MODULE, "Deck found: name=%s status=%s cards=%lu", deck.name.c_str(), deck.valid() ? "ready" : "invalid",
             static_cast<unsigned long>(deck.cardCount));
     decks.push_back(std::move(deck));
@@ -1173,6 +1298,9 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
   queue.unseenCount = 0;
   queue.reviewCount = 0;
   queue.firstReviewDay = -1;
+  queue.snapshotDay = -1;
+  queue.historyBytes = 0;
+  queue.snapshotDirty = false;
   error.clear();
   CacheHeader header;
   if (!ensureImported(deck.sourcePath.c_str(), deck.key, header, error)) return false;
@@ -1186,10 +1314,11 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
         !loadCards(cachePath, rebuilt, queue, error)) {
       return false;
     }
+    header = rebuilt;
   }
 
   const int32_t today = static_cast<int32_t>(now / 86400);
-  if (!replayHistory(deck.key, today, config.needsReviewCount(), config.showForecast, queue, error)) return false;
+  if (!replayHistory(deck.key, header, today, queue, error)) return false;
   queue.unseenCount = detail::buildStudyQueues(queue.cards, now, today, queue.introducedToday, config.newCardsPerDay,
                                                additionalNewCards, queue.dueCards, queue.newCards);
   LOG_DBG(MODULE, "Queue ready: deck=%s cards=%u due=%u new=%u unseen=%u introduced_today=%u extra_new=%u",
@@ -1197,6 +1326,64 @@ bool FlashcardStore::loadStudyQueue(const DeckSummary& deck, const int64_t now, 
           static_cast<unsigned>(queue.newCards.size()), static_cast<unsigned>(queue.unseenCount),
           static_cast<unsigned>(queue.introducedToday), static_cast<unsigned>(additionalNewCards));
   perf.markSuccess();
+  return true;
+}
+
+void FlashcardStore::noteHistoryAppend(StudyQueue& queue) {
+  queue.historyBytes += HISTORY_RECORD_SIZE;
+  queue.snapshotDirty = true;
+}
+
+bool FlashcardStore::saveStudySnapshot(const DeckSummary& deck, StudyQueue& queue) {
+  if (!queue.snapshotDirty) return true;
+  char path[64];
+  makeCachePath(deck.key, path, sizeof(path));
+  CacheHeader cacheHeader;
+  uint32_t boundary = 0;
+  if (!readCacheHeader(path, cacheHeader) || cacheHeader.cardCount != queue.cards.size() ||
+      !snapshotHistoryBoundary(deck.key, queue.historyBytes, boundary))
+    return false;
+  makeHistoryPath(deck.key, path, sizeof(path));
+  if (Storage.exists(path)) {
+    HalFile history;
+    if (!Storage.openFileForRead(MODULE, path, history) || history.fileSize64() != queue.historyBytes) return false;
+  } else if (queue.historyBytes != 0) {
+    return false;
+  }
+
+  makeSnapshotPath(deck.key, path, sizeof(path), true);
+  Storage.remove(path);
+  HalFile file;
+  if (!Storage.openFileForWrite(MODULE, path, file)) return false;
+  uint8_t data[SNAPSHOT_HEADER_SIZE];
+  encodeSnapshotHeader(cacheHeader, queue, boundary, 0, data);
+  bool written = writeExact(file, data, sizeof(data));
+  uint32_t crc = 0xFFFFFFFFU;
+  for (const auto& card : queue.cards) {
+    encodeSnapshotCard(card, data);
+    if (!written || !writeExact(file, data, sizeof(data))) {
+      written = false;
+      break;
+    }
+    crc = updateCrc(crc, data, sizeof(data));
+  }
+  encodeSnapshotHeader(cacheHeader, queue, boundary, crc ^ 0xFFFFFFFFU, data);
+  written = written && file.seek(0) && writeExact(file, data, sizeof(data));
+  const bool closed = file.close();
+  if (!written || !closed) {
+    Storage.remove(path);
+    return false;
+  }
+  char finalPath[64];
+  makeSnapshotPath(deck.key, finalPath, sizeof(finalPath));
+  Storage.remove(finalPath);
+  if (!Storage.rename(path, finalPath)) {
+    Storage.remove(path);
+    return false;
+  }
+  queue.snapshotDirty = false;
+  LOG_DBG(MODULE, "Study snapshot saved: deck=%s cards=%u history_bytes=%llu", deck.name.c_str(),
+          static_cast<unsigned>(queue.cards.size()), static_cast<unsigned long long>(queue.historyBytes));
   return true;
 }
 
