@@ -66,12 +66,15 @@ class UiListActivity : public Activity, protected UiAppHost {
   virtual void drawFooter();
 
   // --- helpers ---------------------------------------------------------------
+  enum class ListSelectionOffset { None, TabBar };
+
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the
   // viewport, and write selection/viewport into props. Call from buildScreen
   // right before screen.list(props).
   // SDK resolves fonts, content padding and touch minimum before measuring.
   // selectionOffset reserves leading ring entries such as the tab bar.
-  void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props, int selectionOffset = 0);
+  void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props,
+                        ListSelectionOffset selectionOffset = ListSelectionOffset::None);
   // Move the selection to index and pull the viewport to it.
   void moveSelectionTo(int index);
 

@@ -70,7 +70,7 @@ void UiTabListActivity::navigateButtons() {
 }
 
 void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& props) {
-  syncListViewport(screen, props, 1);
+  syncListViewport(screen, props, ListSelectionOffset::TabBar);
 }
 
 void UiTabListActivity::buildTabBar(UiScreen& screen) {
