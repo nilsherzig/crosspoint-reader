@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ObfuscationUtils.h>
 
 #include <algorithm>
 #include <cctype>
@@ -844,11 +845,41 @@ bool validLearningSteps(const LearningSteps& steps) {
   return true;
 }
 
+bool validBackupDirectory(const std::string& path) {
+  if (path.empty() || path[0] != '/' || path.size() > 80 || path.find("..") != std::string::npos) return false;
+  return std::all_of(path.begin(), path.end(),
+                     [](const unsigned char c) { return std::isalnum(c) || c == '/' || c == '-' || c == '_'; });
+}
+
+bool validBackupServer(const std::string& url) {
+  if (url.size() > 127 || url.rfind("https://", 0) != 0 || url.size() <= 8) return false;
+  return std::all_of(url.begin() + 8, url.end(),
+                     [](const unsigned char c) { return std::isalnum(c) || c == '.' || c == '-' || c == ':'; });
+}
+
 bool validConfig(const Config& config) {
   return config.newCardsPerDay <= 1000 && std::isfinite(config.desiredRetention) && config.desiredRetention >= 0.70f &&
          config.desiredRetention <= 0.99f && config.maximumIntervalDays >= 1 && config.maximumIntervalDays <= 365000 &&
          validLearningSteps(config.learningSteps) && validLearningSteps(config.relearningSteps) &&
-         config.undoBinding <= UndoBinding::Disabled && validCardFontPointSize(config.fontPointSize);
+         config.undoBinding <= UndoBinding::Disabled && validCardFontPointSize(config.fontPointSize) &&
+         config.backupReviewInterval >= 1 && config.backupReviewInterval <= 1000000 &&
+         validBackupServer(config.backupServerUrl) && validBackupDirectory(config.backupDirectory) &&
+         config.backupPassword.size() <= 63 &&
+         std::all_of(config.backupPassword.begin(), config.backupPassword.end(),
+                     [](const unsigned char c) { return c >= 0x20 && c < 0x7f; });
+}
+
+bool parseQuoted(const char* value, std::string& output) {
+  const size_t length = strlen(value);
+  if (length < 2 || value[0] != '"' || value[length - 1] != '"') return false;
+  output.assign(value + 1, length - 2);
+  return true;
+}
+
+bool writeQuotedConfigLine(HalFile& file, const char* key, const std::string& value) {
+  char line[192];
+  const int length = snprintf(line, sizeof(line), "%s = \"%s\"\n", key, value.c_str());
+  return length > 0 && static_cast<size_t>(length) < sizeof(line) && writeExact(file, line, length);
 }
 
 bool writeUnsignedConfigLine(HalFile& file, const char* key, const uint32_t value) {
@@ -923,7 +954,7 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
     return false;
   }
   serialization::BufferedFileReader reader(file, 256);
-  char line[160];
+  char line[192];
   size_t length = 0;
   uint16_t lineNumber = 1;
   while (true) {
@@ -979,6 +1010,29 @@ bool FlashcardStore::loadConfig(Config& config, std::string& error) {
         } else if (strcmp(key, "show_review_count") == 0 && parseUnsigned(setting, unsignedValue) &&
                    unsignedValue <= 1) {
           config.showReviewCount = unsignedValue != 0;
+        } else if (strcmp(key, "backup_enabled") == 0 && parseUnsigned(setting, unsignedValue) && unsignedValue <= 1) {
+          config.backupEnabled = unsignedValue != 0;
+        } else if (strcmp(key, "backup_review_interval") == 0 && parseUnsigned(setting, unsignedValue) &&
+                   unsignedValue >= 1 && unsignedValue <= 1000000) {
+          config.backupReviewInterval = unsignedValue;
+        } else if (strcmp(key, "backup_server_url") == 0 && parseQuoted(setting, config.backupServerUrl) &&
+                   validBackupServer(config.backupServerUrl)) {
+          // Parsed above.
+        } else if (strcmp(key, "backup_directory") == 0 && parseQuoted(setting, config.backupDirectory) &&
+                   validBackupDirectory(config.backupDirectory)) {
+          // Parsed above.
+        } else if (strcmp(key, "backup_password_obf") == 0) {
+          std::string encoded;
+          if (!parseQuoted(setting, encoded)) {
+            error = "Invalid backup password in config.toml";
+            return false;
+          }
+          bool decoded = false;
+          config.backupPassword = obfuscation::deobfuscateFromBase64(encoded.c_str(), 63, &decoded, nullptr);
+          if (!decoded) {
+            error = "Invalid backup password in config.toml";
+            return false;
+          }
         } else {
           error = "Invalid setting on config.toml line " + std::to_string(lineNumber);
           return false;
@@ -1032,6 +1086,14 @@ bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
   written = written && writeUnsignedConfigLine(file, "font_point_size", config.fontPointSize);
   written = written && writeUnsignedConfigLine(file, "show_forecast", config.showForecast ? 1 : 0);
   written = written && writeUnsignedConfigLine(file, "show_review_count", config.showReviewCount ? 1 : 0);
+  written = written && writeUnsignedConfigLine(file, "backup_enabled", config.backupEnabled ? 1 : 0);
+  written = written && writeUnsignedConfigLine(file, "backup_review_interval", config.backupReviewInterval);
+  written = written && writeQuotedConfigLine(file, "backup_server_url", config.backupServerUrl);
+  written = written && writeQuotedConfigLine(file, "backup_directory", config.backupDirectory);
+  if (!config.backupPassword.empty()) {
+    const String encoded = obfuscation::obfuscateToBase64(config.backupPassword);
+    written = written && writeQuotedConfigLine(file, "backup_password_obf", encoded.c_str());
+  }
   file.flush();
   const bool closed = file.close();
   if (!written || !closed) {

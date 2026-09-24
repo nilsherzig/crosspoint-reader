@@ -25,6 +25,7 @@ class FlashcardDeckListActivity final : public UiListActivity {
  private:
   void openReview(size_t index, uint16_t additionalNewCards);
   void refreshDeckCounts(size_t index);
+  void maybePromptBackup();
   void updateSubtitle(size_t index);
 
   std::vector<flashcards::DeckSummary> decks;

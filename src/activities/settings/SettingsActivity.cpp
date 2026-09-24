@@ -36,6 +36,7 @@
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/flashcards/FlashcardBackupSettingsActivity.h"
 #include "activities/flashcards/FlashcardDisplaySettingsActivity.h"
 #include "activities/flashcards/FlashcardStepsActivity.h"
 #endif
@@ -201,7 +202,7 @@ void SettingsActivity::rebuildSettings() {
     if (!flashcards::FlashcardStore::loadConfig(flashcardConfig, error)) {
       LOG_ERR("SETTINGS", "Could not load flashcard settings: %s", error.c_str());
     }
-    settings.reserve(settings.size() + 9);
+    settings.reserve(settings.size() + 10);
     settings.push_back(
         makeFlashcardSetting(StrId::STR_FLASHCARD_NEW_CARDS_PER_DAY, SettingAction::FlashcardNewCardsPerDay));
     settings.push_back(
@@ -218,6 +219,7 @@ void SettingsActivity::rebuildSettings() {
     settings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_FONT_SIZE, SettingAction::FlashcardFontSize));
     settings.push_back(
         makeFlashcardSetting(StrId::STR_FLASHCARD_DISPLAY_SETTINGS, SettingAction::FlashcardDisplaySettings));
+    settings.push_back(makeFlashcardSetting(StrId::STR_FLASHCARD_BACKUP, SettingAction::FlashcardBackupSettings));
   }
 #endif
   rebuildRowItems();
@@ -511,6 +513,15 @@ void SettingsActivity::toggleSelectedSetting() {
                            saveFlashcardConfig(updated);
                          });
         requestUpdate();
+        break;
+      }
+      case SettingAction::FlashcardBackupSettings: {
+        auto activity = makeUniqueNoThrow<FlashcardBackupSettingsActivity>(renderer, mappedInput);
+        if (!activity) {
+          LOG_ERR("SETTINGS", "OOM: flashcard backup settings");
+          return;
+        }
+        startActivityForResult(std::move(activity), [this](const ActivityResult&) { rebuildSettings(); });
         break;
       }
       case SettingAction::FlashcardDisplaySettings: {

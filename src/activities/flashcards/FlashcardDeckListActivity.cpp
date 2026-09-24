@@ -3,6 +3,7 @@
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
 
 #include <CrossPointSettings.h>
+#include <FlashcardBackupState.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -11,7 +12,9 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "FlashcardBackupActivity.h"
 #include "FlashcardReviewActivity.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
@@ -36,6 +39,13 @@ void FlashcardDeckListActivity::onEnter() {
   }
 
   flashcards::StudyQueue summaryQueue;
+  // This scan already replays every journal for due/new counts; reconcile the
+  // reminder against the same totals after a crash without another SD scan.
+  auto backupState = config.backupEnabled ? makeUniqueNoThrow<flashcards::FlashcardBackupState>() : nullptr;
+  if (config.backupEnabled && (!backupState || !backupState->load())) {
+    LOG_ERR("FLASH", "Could not load backup reminder state");
+    backupState.reset();
+  }
   if (countsReady) {
     for (auto& deck : decks) {
       if (!deck.valid()) continue;
@@ -48,7 +58,9 @@ void FlashcardDeckListActivity::onEnter() {
       deck.newCount = static_cast<uint16_t>(summaryQueue.newCards.size());
       deck.unseenCount = summaryQueue.unseenCount;
       deck.countsAvailable = true;
+      if (backupState) backupState->observe(deck.key, summaryQueue.reviewCount);
     }
+    if (backupState && !backupState->save()) LOG_ERR("FLASH", "Could not reconcile backup reminder");
   }
 
   subtitles.clear();
@@ -142,7 +154,44 @@ void FlashcardDeckListActivity::openReview(const size_t index, const uint16_t ad
     LOG_ERR("FLASH", "OOM: FlashcardReviewActivity");
     return;
   }
-  startActivityForResult(std::move(activity), [this, index](const ActivityResult&) { refreshDeckCounts(index); });
+  startActivityForResult(std::move(activity), [this, index](const ActivityResult& result) {
+    refreshDeckCounts(index);
+    if (!result.isCancelled) maybePromptBackup();
+  });
+}
+
+void FlashcardDeckListActivity::maybePromptBackup() {
+  if (!config.backupEnabled || config.backupPassword.empty()) return;
+  auto state = makeUniqueNoThrow<flashcards::FlashcardBackupState>();
+  if (!state || !state->load()) {
+    LOG_ERR("FLASH", "Could not check backup reminder");
+    return;
+  }
+  if (!state->shouldPrompt(config.backupReviewInterval)) return;
+  auto prompt = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_FLASHCARD_BACKUP),
+                                                        tr(STR_FLASHCARD_BACKUP_PROMPT));
+  if (!prompt) {
+    LOG_ERR("FLASH", "OOM: backup reminder");
+    return;
+  }
+  startActivityForResult(std::move(prompt), [this](const ActivityResult& result) {
+    if (result.isCancelled) {
+      auto state = makeUniqueNoThrow<flashcards::FlashcardBackupState>();
+      if (!state || !state->load()) {
+        LOG_ERR("FLASH", "Could not postpone backup reminder");
+        return;
+      }
+      state->postpone(config.backupReviewInterval);
+      if (!state->save()) LOG_ERR("FLASH", "Could not save backup reminder postponement");
+      return;
+    }
+    auto activity = makeUniqueNoThrow<FlashcardBackupActivity>(renderer, mappedInput);
+    if (!activity) {
+      LOG_ERR("FLASH", "OOM: flashcard backup activity");
+      return;
+    }
+    startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
+  });
 }
 
 void FlashcardDeckListActivity::refreshDeckCounts(const size_t index) {
@@ -158,6 +207,15 @@ void FlashcardDeckListActivity::refreshDeckCounts(const size_t index) {
     deck.newCount = static_cast<uint16_t>(summaryQueue.newCards.size());
     deck.unseenCount = summaryQueue.unseenCount;
     deck.countsAvailable = true;
+    if (config.backupEnabled) {
+      auto state = makeUniqueNoThrow<flashcards::FlashcardBackupState>();
+      if (state && state->load()) {
+        state->observe(deck.key, summaryQueue.reviewCount);
+        if (!state->save()) LOG_ERR("FLASH", "Could not sync backup counter after review");
+      } else {
+        LOG_ERR("FLASH", "Could not load backup counter after review");
+      }
+    }
   } else if (!detail.empty()) {
     LOG_ERR("FLASH", "Could not refresh counts for %s: %s", deck.name.c_str(), detail.c_str());
   }

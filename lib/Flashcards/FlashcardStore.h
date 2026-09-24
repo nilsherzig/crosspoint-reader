@@ -40,8 +40,13 @@ struct Config {
   uint8_t fontPointSize = 12;
   bool showForecast = false;
   bool showReviewCount = true;
+  bool backupEnabled = false;
+  uint32_t backupReviewInterval = 500;
+  std::string backupServerUrl = "https://files.nilsherzig.com";
+  std::string backupDirectory = "/flashcards-backups";
+  std::string backupPassword;
 
-  constexpr bool needsReviewCount() const { return showReviewCount || showForecast; }
+  constexpr bool needsReviewCount() const { return showReviewCount || showForecast || backupEnabled; }
 };
 
 struct DeckSummary {
