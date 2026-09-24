@@ -229,7 +229,9 @@ bool setupScenario(const uint32_t cardCount, const uint32_t reviewCount, const b
   // TODO(4b): Load the queue once: FlashcardStore::loadStudyQueue(out.deck, HISTORY_START, out.config, queue, error).
   //           This first load imports the CSV into the card cache, so the measurement later only reads the cache.
   //           On failure: print error.c_str() and return false.
-  flashcards::FlashcardStore::loadStudyQueue(out.deck, HISTORY_START, out.config, queue, error);
+  if (!flashcards::FlashcardStore::loadStudyQueue(out.deck, HISTORY_START, out.config, queue, error)) {
+    printf("%s\n", error.c_str());
+  }
 
   // TODO(4c): Write `reviewCount` history records through the real API, so the file format is always valid:
   //             for i in 0..reviewCount:
