@@ -43,3 +43,16 @@ target_include_directories(flashcard_store_integration_tests PRIVATE
 )
 target_link_libraries(flashcard_store_integration_tests PRIVATE crosspoint_test_common GTest::gtest_main)
 gtest_discover_tests(flashcard_store_integration_tests)
+
+add_executable(flashcard_queue_benchmark
+  QueueBuilderBenchmark.cpp
+  ${REPO_ROOT}/lib/Flashcards/CardScheduler.cpp
+  ${REPO_ROOT}/lib/Flashcards/CsvReader.cpp
+  ${REPO_ROOT}/lib/Flashcards/FlashcardConfigParser.cpp
+  ${REPO_ROOT}/lib/Flashcards/FlashcardStore.cpp
+  ${REPO_ROOT}/lib/Flashcards/FsrsScheduler.cpp
+  ${REPO_ROOT}/lib/Flashcards/SchedulingFuzzer.cpp
+  ${REPO_ROOT}/lib/Flashcards/StudyQueueBuilder.cpp
+)
+target_include_directories(flashcard_queue_benchmark PRIVATE ${REPO_ROOT}/lib/Flashcards ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${REPO_ROOT}/lib/Serialization)
+target_link_libraries(flashcard_queue_benchmark PRIVATE crosspoint_test_common)

@@ -1,2 +1,3 @@
 CompileFlags:
     Add: [-std=c++2a]
+    Remove: [-mlongcalls, -fstrict-volatile-bitfields, -fno-tree-switch-conversion, -mtext-section-literals, -mdisable-hardware-atomics]
