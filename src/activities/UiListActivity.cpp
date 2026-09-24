@@ -110,7 +110,8 @@ void UiListActivity::navigateButtons() {
       [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.inputPageRows())); });
 }
 
-void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const int selectionOffset) {
+void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props,
+                                      const ListSelectionOffset selectionOffset) {
   props.toggleCheckbox = true;
   props.toggleWidth = 28;
   props.toggleHeight = 28;
@@ -120,7 +121,7 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
   const bool trusted = n.trusts(listCount());
   const int drawn = n.drawnRows;
 
-  screen.syncListViewport(n, props, listCount(), selectionOffset);
+  screen.syncListViewport(n, props, listCount(), static_cast<int>(selectionOffset));
 
   // When the selection is already visible in the current viewport (based on
   // the measured drawnRows rather than the unweighted visibleRows estimate),
