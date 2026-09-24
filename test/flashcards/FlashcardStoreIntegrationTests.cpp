@@ -341,7 +341,7 @@ TEST_F(FlashcardStoreIntegrationTest, FastDeckScanDoesNotImportOrReadJournal) {
   EXPECT_FALSE(fake::files.count(deckFile(fresh->key, "cards")));
 }
 
-TEST_F(FlashcardStoreIntegrationTest, FastScanDecksCanBeCountedIndividuallyAfterFirstDisplay) {
+TEST_F(FlashcardStoreIntegrationTest, OverviewScanCreatesMissingSnapshotsBeforeFirstDisplay) {
   ASSERT_TRUE(seedSnapshot());
   fake::add("/flashcards/new.csv", "front,back\nFresh,Card\n");
   std::vector<flashcards::DeckSummary> decks;
@@ -350,6 +350,7 @@ TEST_F(FlashcardStoreIntegrationTest, FastScanDecksCanBeCountedIndividuallyAfter
   const auto fresh = std::find_if(decks.begin(), decks.end(), [](const auto& item) { return item.name == "new"; });
   ASSERT_NE(fresh, decks.end());
   EXPECT_FALSE(fresh->cardCountAvailable);
+  EXPECT_FALSE(fake::files.count(deckFile(fresh->key, "state")));
 
   flashcards::StudyQueue queue;
   std::string error;
@@ -357,14 +358,58 @@ TEST_F(FlashcardStoreIntegrationTest, FastScanDecksCanBeCountedIndividuallyAfter
   EXPECT_EQ(queue.cards.size(), 1U);
   EXPECT_EQ(queue.dueCards.size(), 0U);
   EXPECT_EQ(queue.newCards.size(), 1U);
+  EXPECT_TRUE(queue.snapshotDirty);
+  ASSERT_TRUE(flashcards::FlashcardStore::saveStudySnapshot(*fresh, queue));
+  EXPECT_TRUE(fake::files.count(deckFile(fresh->key, "state")));
 
   ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW + 2, config, queue, error)) << error;
   EXPECT_EQ(queue.cards.size(), 3U);
   EXPECT_EQ(queue.dueCards.size(), 1U);
   EXPECT_EQ(queue.newCards.size(), 2U);
+  EXPECT_FALSE(queue.snapshotDirty);
+  ASSERT_TRUE(flashcards::FlashcardStore::saveStudySnapshot(deck, queue));
+
+  fake::resetIoCounters();
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(*fresh, NOW + 2, config, queue, error)) << error;
+  EXPECT_FALSE(queue.snapshotDirty);
+  EXPECT_EQ(queue.newCards.size(), 1U);
+  EXPECT_EQ(fake::bytesReadByPath[deckFile(fresh->key, "history")], 0U);
 }
 
-TEST_F(FlashcardStoreIntegrationTest, FailedDeferredCountDoesNotPreventOtherDeckCounts) {
+TEST_F(FlashcardStoreIntegrationTest, OverviewScanRefreshesOutdatedSnapshotFromJournalTail) {
+  ASSERT_TRUE(seedSnapshot());
+  flashcards::StudyQueue queue;
+  ASSERT_TRUE(load(queue, NOW + 2));
+  ASSERT_TRUE(review(queue, 0, NOW + 3));
+  std::string error;
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW + 4, config, queue, error)) << error;
+  EXPECT_TRUE(queue.snapshotDirty);
+  EXPECT_EQ(queue.reviewCount, 2U);
+  ASSERT_TRUE(flashcards::FlashcardStore::saveStudySnapshot(deck, queue));
+
+  fake::resetIoCounters();
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW + 4, config, queue, error)) << error;
+  EXPECT_FALSE(queue.snapshotDirty);
+  EXPECT_EQ(queue.reviewCount, 2U);
+  EXPECT_LE(fake::bytesReadByPath[historyPath()], 60U);
+}
+
+TEST_F(FlashcardStoreIntegrationTest, OverviewScanRepairsInvalidSnapshot) {
+  ASSERT_TRUE(seedSnapshot());
+  fake::files.at(snapshotPath())->bytes[SNAPSHOT_HEADER_BYTES + 20] ^= 0x40;
+  flashcards::StudyQueue queue;
+  ASSERT_TRUE(load(queue, NOW + 2));
+  EXPECT_TRUE(queue.snapshotDirty);
+  EXPECT_EQ(queue.reviewCount, 1U);
+  ASSERT_TRUE(flashcards::FlashcardStore::saveStudySnapshot(deck, queue));
+
+  fake::resetIoCounters();
+  ASSERT_TRUE(load(queue, NOW + 2));
+  EXPECT_FALSE(queue.snapshotDirty);
+  EXPECT_LE(fake::bytesReadByPath[historyPath()], 60U);
+}
+
+TEST_F(FlashcardStoreIntegrationTest, FailedDeckCountDoesNotPreventOtherDeckCounts) {
   fake::add("/flashcards/new.csv", "front,back\nFresh,Card\n");
   std::vector<flashcards::DeckSummary> decks;
   ASSERT_TRUE(flashcards::FlashcardStore::scanDecks(decks, false));

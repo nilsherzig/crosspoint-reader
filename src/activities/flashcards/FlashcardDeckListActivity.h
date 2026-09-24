@@ -15,20 +15,17 @@ class FlashcardDeckListActivity final : public UiListActivity {
  public:
   FlashcardDeckListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
   void onEnter() override;
-  void loop() override;
 
  protected:
   int listCount() const override;
   const char* headerTitle() const override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
-  void onBackButton() override;
 
  private:
   void openReview(size_t index, uint16_t additionalNewCards);
   void maybePromptBackup();
   void updateSubtitle(size_t index);
-  size_t nextDeckToCount = 0;
 
   std::vector<flashcards::DeckSummary> decks;
   std::vector<std::string> subtitles;

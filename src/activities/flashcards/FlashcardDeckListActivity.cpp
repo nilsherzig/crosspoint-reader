@@ -39,6 +39,26 @@ void FlashcardDeckListActivity::onEnter() {
     LOG_ERR("FLASH", "Deck due/new counts unavailable: %s", detail.c_str());
   }
 
+  flashcards::StudyQueue summaryQueue;
+  if (countsReady) {
+    for (auto& deck : decks) {
+      if (!deck.valid()) continue;
+      if (!flashcards::FlashcardStore::loadStudyQueue(deck, now, config, summaryQueue, detail)) {
+        LOG_ERR("FLASH", "Could not count due/new cards for %s: %s", deck.name.c_str(), detail.c_str());
+        continue;
+      }
+      deck.cardCount = static_cast<uint32_t>(summaryQueue.cards.size());
+      deck.cardCountAvailable = true;
+      deck.dueCount = static_cast<uint16_t>(summaryQueue.dueCards.size());
+      deck.newCount = static_cast<uint16_t>(summaryQueue.newCards.size());
+      deck.unseenCount = summaryQueue.unseenCount;
+      deck.countsAvailable = true;
+      if (!flashcards::FlashcardStore::saveStudySnapshot(deck, summaryQueue)) {
+        LOG_ERR("FLASH", "Could not save study snapshot for %s", deck.name.c_str());
+      }
+    }
+  }
+
   subtitles.clear();
   listItems.clear();
   subtitles.reserve(decks.size());
@@ -69,41 +89,7 @@ void FlashcardDeckListActivity::onEnter() {
     item.actionValue = static_cast<int16_t>(i);
     listItems.push_back(item);
   }
-  nextDeckToCount = 0;
   UiListActivity::onEnter();
-}
-
-void FlashcardDeckListActivity::loop() {
-  UiListActivity::loop();
-  // Leave the first render and any navigation untouched; count one deck per
-  // subsequent loop pass so the list appears before the SD-backed queue loads.
-  if (!countsReady || !routingReady() || resultHandler) return;
-  while (nextDeckToCount < decks.size() && !decks[nextDeckToCount].valid()) ++nextDeckToCount;
-  if (nextDeckToCount == decks.size()) return;
-
-  const size_t index = nextDeckToCount++;
-  int64_t now = 0;
-  std::string detail;
-  if (!halClock.getUnixTime(now) ||
-      !flashcards::FlashcardStore::loadStudyQueue(decks[index], now, config, preparedQueue, detail)) {
-    LOG_ERR("FLASH", "Could not count due/new cards for %s: %s", decks[index].name.c_str(), detail.c_str());
-  } else {
-    auto& deck = decks[index];
-    deck.cardCount = static_cast<uint32_t>(preparedQueue.cards.size());
-    deck.cardCountAvailable = true;
-    deck.dueCount = static_cast<uint16_t>(preparedQueue.dueCards.size());
-    deck.newCount = static_cast<uint16_t>(preparedQueue.newCards.size());
-    deck.unseenCount = preparedQueue.unseenCount;
-    deck.countsAvailable = true;
-    updateSubtitle(index);
-    requestUpdate();
-  }
-  if (nextDeckToCount == decks.size()) preparedQueue = flashcards::StudyQueue{};
-}
-
-void FlashcardDeckListActivity::onBackButton() {
-  nextDeckToCount = decks.size();
-  finish();
 }
 
 int FlashcardDeckListActivity::listCount() const { return static_cast<int>(decks.size()); }
