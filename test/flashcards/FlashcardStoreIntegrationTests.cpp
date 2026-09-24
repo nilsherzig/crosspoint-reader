@@ -341,6 +341,46 @@ TEST_F(FlashcardStoreIntegrationTest, FastDeckScanDoesNotImportOrReadJournal) {
   EXPECT_FALSE(fake::files.count(deckFile(fresh->key, "cards")));
 }
 
+TEST_F(FlashcardStoreIntegrationTest, FastScanDecksCanBeCountedIndividuallyAfterFirstDisplay) {
+  ASSERT_TRUE(seedSnapshot());
+  fake::add("/flashcards/new.csv", "front,back\nFresh,Card\n");
+  std::vector<flashcards::DeckSummary> decks;
+  ASSERT_TRUE(flashcards::FlashcardStore::scanDecks(decks, false));
+  ASSERT_EQ(decks.size(), 2U);
+  const auto fresh = std::find_if(decks.begin(), decks.end(), [](const auto& item) { return item.name == "new"; });
+  ASSERT_NE(fresh, decks.end());
+  EXPECT_FALSE(fresh->cardCountAvailable);
+
+  flashcards::StudyQueue queue;
+  std::string error;
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(*fresh, NOW + 2, config, queue, error)) << error;
+  EXPECT_EQ(queue.cards.size(), 1U);
+  EXPECT_EQ(queue.dueCards.size(), 0U);
+  EXPECT_EQ(queue.newCards.size(), 1U);
+
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW + 2, config, queue, error)) << error;
+  EXPECT_EQ(queue.cards.size(), 3U);
+  EXPECT_EQ(queue.dueCards.size(), 1U);
+  EXPECT_EQ(queue.newCards.size(), 2U);
+}
+
+TEST_F(FlashcardStoreIntegrationTest, FailedDeferredCountDoesNotPreventOtherDeckCounts) {
+  fake::add("/flashcards/new.csv", "front,back\nFresh,Card\n");
+  std::vector<flashcards::DeckSummary> decks;
+  ASSERT_TRUE(flashcards::FlashcardStore::scanDecks(decks, false));
+  ASSERT_EQ(decks.size(), 2U);
+  fake::files.erase(CSV_PATH);
+
+  flashcards::StudyQueue queue;
+  std::string error;
+  EXPECT_FALSE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW, config, queue, error));
+  EXPECT_FALSE(error.empty());
+  const auto fresh = std::find_if(decks.begin(), decks.end(), [](const auto& item) { return item.name == "new"; });
+  ASSERT_NE(fresh, decks.end());
+  ASSERT_TRUE(flashcards::FlashcardStore::loadStudyQueue(*fresh, NOW, config, queue, error)) << error;
+  EXPECT_EQ(queue.newCards.size(), 1U);
+}
+
 TEST_F(FlashcardStoreIntegrationTest, EverySingleByteSnapshotErrorFallsBackToJournal) {
   ASSERT_TRUE(seedSnapshot());
   const auto path = snapshotPath();
