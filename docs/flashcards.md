@@ -128,6 +128,8 @@ python3 scripts/debugging_monitor.py /dev/ttyACM0 \
   --log-file flashcards-perf.log
 ```
 
+To summarize deck-list opens in the saved log, run `python3 scripts/measure_flashcard_timings.py analyze --log flashcards-perf.log`. Alternatively, `python3 scripts/measure_flashcard_timings.py capture --port /dev/ttyACM0 --duration 120` records serial output and prints the summary when capture ends; do not run it alongside another monitor on the same port. The report separates time until the list is built from time to the first display wait completion (when logged), and lists nested store timings without adding them to the total.
+
 The monitor still collects the firmware's periodic `[MEM]` samples for its internal-RAM and PSRAM graph before applying the display filter. It does not measure CPU utilization; `[FLASHPERF] duration_us` measures user-relevant device wall time, including SD or display waits where applicable. Compare a first deck-list open after `--reset-cache` with a second open without resetting the cache, then open each generated deck, reveal cards, rate with both outcomes, leave the session, and reopen it to measure history replay. `--reset-history` deletes only benchmark-deck history; omit it when measuring history growth.
 
 ## Revisit-friendly decisions
