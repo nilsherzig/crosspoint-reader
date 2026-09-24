@@ -41,6 +41,7 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   void reveal();
   void rate(flashcards::Rating rating);
   void advance();
+  void finishSession();
   void undo();
   bool undoTouchEnabled() const;
   bool undoSideEnabled(MappedInputManager::Button button) const;
@@ -69,6 +70,7 @@ class FlashcardReviewActivity final : public Activity, private UiAppHost {
   int32_t currentUtcDay = -1;
   bool currentFromPending = false;
   bool answerShown = false;
+  bool backupTrackingReady = false;
   struct LastRating {
     flashcards::StudyCard card;
     Phase phase = Phase::Due;

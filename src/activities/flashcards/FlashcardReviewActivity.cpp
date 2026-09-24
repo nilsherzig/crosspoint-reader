@@ -3,10 +3,12 @@
 #if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
 
 #include <CrossPointSettings.h>
+#include <FlashcardBackupState.h>
 #include <FlashcardTextLayout.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <ReviewCount.h>
 #include <ReviewForecast.h>
 #include <ReviewUndo.h>
@@ -86,6 +88,7 @@ void FlashcardReviewActivity::onEnter() {
     showError(ErrorKind::Deck, detail);
     return;
   }
+  backupTrackingReady = config.backupEnabled;
   pendingLearningCards.reserve(queue.cards.size());
   size_t readyDueCount = 0;
   for (const uint16_t index : queue.dueCards) {
@@ -109,6 +112,16 @@ void FlashcardReviewActivity::onEnter() {
 
 void FlashcardReviewActivity::onExit() {
   LOG_DBG("FLASH", "Study session closing: deck=%s phase=%s", deck.name.c_str(), phaseName());
+  if (backupTrackingReady) {
+    // This also runs when Home replaces the activity without popping to the deck list.
+    auto state = makeUniqueNoThrow<flashcards::FlashcardBackupState>();
+    if (!state || !state->load()) {
+      LOG_ERR("FLASH", "Could not load backup counter when closing review");
+    } else {
+      state->observe(deck.key, queue.reviewCount);
+      if (!state->save()) LOG_ERR("FLASH", "Could not save backup counter when closing review");
+    }
+  }
   lastRating.valid = false;
   undoIndicatorUntil = 0;
   queue = flashcards::StudyQueue{};
@@ -128,7 +141,7 @@ void FlashcardReviewActivity::actionTrampoline(const fui::ActionEvent& event, vo
 
 void FlashcardReviewActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
+    finishSession();
     return;
   }
 
@@ -167,7 +180,7 @@ void FlashcardReviewActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
         mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
         mappedInput.wasReleased(MappedInputManager::Button::PageForward)) {
-      finish();
+      finishSession();
       return;
     }
   } else if (!answerShown) {
@@ -333,7 +346,7 @@ void FlashcardReviewActivity::buildScreen(UiScreen& screen) {
 void FlashcardReviewActivity::handleAction(const fui::ActionId action) {
   app.clearTapFlash();
   if (action == ACTION_DONE) {
-    finish();
+    finishSession();
   } else if (action == ACTION_REVEAL) {
     reveal();
   } else if (action == ACTION_AGAIN) {
@@ -341,6 +354,13 @@ void FlashcardReviewActivity::handleAction(const fui::ActionId action) {
   } else if (action == ACTION_GOOD) {
     rate(flashcards::Rating::Good);
   }
+}
+
+void FlashcardReviewActivity::finishSession() {
+  ActivityResult result;
+  result.isCancelled = phase != Phase::Complete;
+  setResult(std::move(result));
+  finish();
 }
 
 void FlashcardReviewActivity::reveal() {

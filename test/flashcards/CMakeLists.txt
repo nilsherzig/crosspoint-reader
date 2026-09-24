@@ -1,6 +1,7 @@
 add_executable(flashcards_tests
   CardSchedulerBehaviorTests.cpp
   FlashcardsTests.cpp
+  FlashcardBackupCounterTests.cpp
   FlashcardTextLayoutTests.cpp
   ReviewCountTests.cpp
   ReviewForecastTests.cpp

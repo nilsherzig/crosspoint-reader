@@ -102,6 +102,8 @@ TEST(StudyQueueBuilder, LearnAheadDefaultsToTwentyMinutes) {
   EXPECT_EQ(flashcards::Config{}.undoBinding, flashcards::UndoBinding::TouchAndSides);
   EXPECT_EQ(flashcards::Config{}.fontPointSize, 12);
   EXPECT_FALSE(flashcards::Config{}.showForecast);
+  EXPECT_FALSE(flashcards::Config{}.backupEnabled);
+  EXPECT_EQ(flashcards::Config{}.backupReviewInterval, 500U);
   EXPECT_TRUE(flashcards::validCardFontPointSize(12));
   EXPECT_TRUE(flashcards::validCardFontPointSize(18));
   EXPECT_FALSE(flashcards::validCardFontPointSize(13));
