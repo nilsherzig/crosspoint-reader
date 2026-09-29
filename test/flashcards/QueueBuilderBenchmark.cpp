@@ -205,10 +205,9 @@ std::string makeCsv(const uint32_t cardCount) {
   csv.reserve(cardCount * 32);
   for (uint32_t i = 0; i < cardCount; ++i) {
     char buffer[30];
-    snprintf(buffer, sizeof(buffer), "frage %d,antwort %d\n", i, i);
+    snprintf(buffer, sizeof(buffer), "frage %u,antwort %u\n", i, i);
     csv += buffer;
   }
-  // (void)cardCount;
   return csv;
 }
 
@@ -230,7 +229,8 @@ bool setupScenario(const uint32_t cardCount, const uint32_t reviewCount, const b
   //           This first load imports the CSV into the card cache, so the measurement later only reads the cache.
   //           On failure: print error.c_str() and return false.
   if (!flashcards::FlashcardStore::loadStudyQueue(out.deck, HISTORY_START, out.config, queue, error)) {
-    printf("%s\n", error.c_str());
+    std::printf("setup failed: first load (%s)\n", error.c_str());
+    return false;
   }
 
   // TODO(4c): Write `reviewCount` history records through the real API, so the file format is always valid:
@@ -241,6 +241,16 @@ bool setupScenario(const uint32_t cardCount, const uint32_t reviewCount, const b
   //               FlashcardStore::noteHistoryAppend(queue)   (keeps queue.historyBytes in sync with the file)
   //           reviewCard introduces unseen cards itself (that appends one extra Introduction record).
   //           Mix in some flashcards::Rating::Again (e.g. every 7th review) for realism.
+  for (uint32_t i = 0; i < reviewCount; ++i) {
+    flashcards::StudyCard& card = queue.cards[i % queue.cards.size()];
+    const int64_t now = HISTORY_START + static_cast<int64_t>(i) * 60;
+    const flashcards::Rating rating = i % 7 == 0 ? flashcards::Rating::Again : flashcards::Rating::Good;
+    if (!flashcards::FlashcardStore::reviewCard(out.deck, card, now, rating, out.config, error)) {
+      std::printf("setup failed: review %u (%s)\n", i, error.c_str());
+      return false;
+    }
+    flashcards::FlashcardStore::noteHistoryAppend(queue);
+  }
   out.openAt = HISTORY_START + static_cast<int64_t>(reviewCount) * 60 + 60;
 
   if (withSnapshot) {
@@ -248,6 +258,12 @@ bool setupScenario(const uint32_t cardCount, const uint32_t reviewCount, const b
     //           records how many history bytes are covered), then FlashcardStore::saveStudySnapshot(out.deck, fresh).
     //           The next load then restores the snapshot and replays only records written after it.
     //           Same pattern as seedSnapshot() in FlashcardStoreIntegrationTests.cpp.
+    flashcards::StudyQueue fresh;
+    if (!flashcards::FlashcardStore::loadStudyQueue(out.deck, out.openAt, out.config, fresh, error) ||
+        !flashcards::FlashcardStore::saveStudySnapshot(out.deck, fresh)) {
+      std::printf("setup failed: snapshot (%s)\n", error.c_str());
+      return false;
+    }
   }
   return true;
 }
@@ -276,11 +292,30 @@ LoadResult measureLoad(const Scenario& scenario) {
     //           Careful: `error` is a std::string. Only touch it AFTER `end`, otherwise its allocation is measured.
     // TODO(5b): On run 0 copy allocs, peakBytes, queue.reviewCount and ok into result.
     //           If the load fails, print error.c_str() and return result (ok = false).
-    (void)queue;
-    (void)error;
+    const size_t liveBytesBefore = stats.liveBytes;
+    resetStats();
+    const auto start = std::chrono::steady_clock::now();
+    const bool ok =
+        flashcards::FlashcardStore::loadStudyQueue(scenario.deck, scenario.openAt, scenario.config, queue, error);
+    const auto end = std::chrono::steady_clock::now();
+    samples.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+
+    if (run == 0) {
+      result.allocs = stats.allocs;
+      result.peakBytes = stats.peakBytes - liveBytesBefore;
+      result.reviewCount = queue.reviewCount;
+      result.ok = ok;
+    }
+    if (!ok) {
+      std::printf("load failed: %s\n", error.c_str());
+      result.ok = false;
+      return result;
+    }
   }
 
   // TODO(5c): Median of samples, like in measure().
+  std::sort(samples.begin(), samples.end());
+  result.medianMicros = samples[samples.size() / 2];
   return result;
 }
 
@@ -324,8 +359,17 @@ int main() {
     //          Ratio: compare with the previous row of the same mode. Skip it for reviews = 0,
     //          the first doubling (1000 -> 2000) is the first meaningful ratio.
     //          `replayed` = r.reviewCount; it should equal `reviews` in both modes.
-    (void)warm;
-    (void)REVIEWS;
+    double previousLoad = 0;
+    for (const uint32_t reviews : REVIEWS) {
+      Scenario scenario;
+      if (!setupScenario(CARDS, reviews, warm, scenario)) return 1;
+      const LoadResult r = measureLoad(scenario);
+      if (!r.ok) return 1;
+      const double loadRatio = previousLoad > 0 && reviews > 1000 ? r.medianMicros / previousLoad : 0;
+      std::printf("%8u %6s %12.1f %8.2f %8zu %12zu %8u\n", reviews, warm ? "warm" : "cold", r.medianMicros, loadRatio,
+                  r.allocs, r.peakBytes, r.reviewCount);
+      previousLoad = r.medianMicros;
+    }
   }
   return 0;
 }
