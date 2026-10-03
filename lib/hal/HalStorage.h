@@ -121,7 +121,6 @@ class HalFile : public Print {
   size_t write(const void* buf, size_t count);
   size_t write(uint8_t b) override;
   bool rename(const char* newPath);
-  bool truncate(uint64_t length);
   bool isDirectory() const;
   void rewindDirectory();
   bool close();
