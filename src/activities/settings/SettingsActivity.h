@@ -1,10 +1,5 @@
 #pragma once
-#include <BoardConfig.h>
 #include <I18n.h>
-
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-#include <FlashcardStore.h>
-#endif
 
 #include <functional>
 #include <span>
@@ -37,16 +32,7 @@ enum class SettingAction {
   KeyboardLayouts,
   HomeButton,
   About,
-  FlashcardNewCardsPerDay,
-  FlashcardLearnAheadLimit,
-  FlashcardDesiredRetention,
-  FlashcardMaximumInterval,
-  FlashcardLearningSteps,
-  FlashcardRelearningSteps,
-  FlashcardUndoBinding,
-  FlashcardFontSize,
-  FlashcardDisplaySettings,
-  FlashcardBackupSettings,
+  FlashcardSettings,
 };
 
 struct SettingInfo {
@@ -202,10 +188,6 @@ class SettingsActivity final : public UiListActivity {
   const SettingsSection section;
   std::vector<SettingInfo> settings;
 
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-  flashcards::Config flashcardConfig;
-#endif
-
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
 
@@ -221,16 +203,9 @@ class SettingsActivity final : public UiListActivity {
   void rebuildRowItems();
   void toggleSelectedSetting();
   void openSleepTimeoutPicker();
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-  void openFlashcardNumericPicker(SettingAction action);
-  void openFlashcardLearnAheadEditor();
-  void openFlashcardStepsEditor(bool relearning);
-  bool saveFlashcardConfig(const flashcards::Config& config);
-  std::string flashcardSettingValueText(SettingAction action) const;
-#endif
   void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
-  std::string settingValueText(const SettingInfo& setting) const;
+  static std::string settingValueText(const SettingInfo& setting);
 
   int listCount() const override { return static_cast<int>(settings.size()); }
   void buildScreen(UiScreen& screen) override;
