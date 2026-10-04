@@ -18,12 +18,26 @@ for size in ${NOTOSERIF_FONT_SIZES[@]}; do
   done
 done
 
+# Greek and math symbols for flashcard text, which always renders in Noto Sans
+# Regular. Noto Sans supplies Greek; Noto Sans Math fills the arrow, operator
+# and letterlike blocks Noto Sans lacks. Limited to Regular for flash budget.
+MATH_INTERVALS=(
+  --additional-intervals 0x0370,0x03FF  # Greek and Coptic
+  --additional-intervals 0x2100,0x214F  # Letterlike symbols (ℕ ℝ ℤ ℓ ℏ ℵ)
+  --additional-intervals 0x2308,0x230B  # ceiling and floor brackets
+  --additional-intervals 0x27E8,0x27E9  # mathematical angle brackets
+)
+
 for size in ${NOTOSANS_FONT_SIZES[@]}; do
   for style in ${READER_FONT_STYLES[@]}; do
     font_name="notosans_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
     font_path="../builtinFonts/source/NotoSans/NotoSans-${style}.ttf"
     output_path="../builtinFonts/${font_name}.h"
-    python fontconvert.py $font_name $size $font_path --2bit --compress --pnum --zopfli > $output_path
+    extra_args=()
+    if [ "$style" = "Regular" ]; then
+      extra_args=(../builtinFonts/source/NotoSansMath/NotoSansMath-Regular.ttf "${MATH_INTERVALS[@]}")
+    fi
+    python fontconvert.py $font_name $size $font_path "${extra_args[@]}" --2bit --compress --pnum --zopfli > $output_path
     echo "Generated $output_path"
   done
 done
