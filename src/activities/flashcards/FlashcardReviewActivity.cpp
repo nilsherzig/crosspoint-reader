@@ -35,8 +35,6 @@ static constexpr StrId MONTH_NAMES[] = {
 
 int cardFontId(const uint8_t pointSize) {
   switch (pointSize) {
-    case 12:
-      return UI_12_FONT_ID;
     case 14:
       return NOTOSANS_14_FONT_ID;
     case 16:
@@ -44,7 +42,7 @@ int cardFontId(const uint8_t pointSize) {
     case 18:
       return NOTOSANS_18_FONT_ID;
     default:
-      return UI_12_FONT_ID;
+      return NOTOSANS_12_FONT_ID;
   }
 }
 }  // namespace
