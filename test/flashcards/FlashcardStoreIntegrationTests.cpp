@@ -114,6 +114,45 @@ class FlashcardStoreIntegrationTest : public ::testing::Test {
   }
 };
 
+TEST_F(FlashcardStoreIntegrationTest, HeaderlessDeckKeepsFirstCard) {
+  fake::add(CSV_PATH, "\"Alpha, quoted\",\"One\"\nBeta,Two\n");
+  flashcards::StudyQueue queue;
+  ASSERT_TRUE(load(queue));
+  ASSERT_EQ(queue.cards.size(), 2U);
+  const auto firstCard = std::find_if(queue.cards.begin(), queue.cards.end(),
+                                      [](const flashcards::StudyCard& card) { return card.sourceOrder == 0; });
+  ASSERT_NE(firstCard, queue.cards.end());
+  ASSERT_FALSE(queue.newCards.empty());
+  EXPECT_EQ(queue.newCards.front(), std::distance(queue.cards.begin(), firstCard));
+  std::string text;
+  std::string error;
+  ASSERT_TRUE(flashcards::FlashcardStore::readCardText(deck, *firstCard, false, text, error)) << error;
+  EXPECT_EQ(text, "Alpha, quoted");
+  ASSERT_TRUE(flashcards::FlashcardStore::readCardText(deck, *firstCard, true, text, error)) << error;
+  EXPECT_EQ(text, "One");
+}
+
+TEST_F(FlashcardStoreIntegrationTest, HeaderlessDeckRequiresBothFieldsOnFirstRow) {
+  fake::add(CSV_PATH, "Alpha,\nBeta,Two\n");
+  flashcards::StudyQueue queue;
+  std::string error;
+  EXPECT_FALSE(flashcards::FlashcardStore::loadStudyQueue(deck, NOW, config, queue, error));
+  EXPECT_EQ(error, "Row 1: front and back are required");
+}
+
+TEST_F(FlashcardStoreIntegrationTest, NamedHeaderSupportsReorderedColumns) {
+  fake::add(CSV_PATH, "ignored,back,front\nTag,One,Alpha\n");
+  flashcards::StudyQueue queue;
+  ASSERT_TRUE(load(queue));
+  ASSERT_EQ(queue.cards.size(), 1U);
+  std::string text;
+  std::string error;
+  ASSERT_TRUE(flashcards::FlashcardStore::readCardText(deck, queue.cards[0], false, text, error)) << error;
+  EXPECT_EQ(text, "Alpha");
+  ASSERT_TRUE(flashcards::FlashcardStore::readCardText(deck, queue.cards[0], true, text, error)) << error;
+  EXPECT_EQ(text, "One");
+}
+
 TEST_F(FlashcardStoreIntegrationTest, ColdSnapshotRoundTripMatchesFullJournalReplay) {
   ASSERT_TRUE(seedSnapshot());
   EXPECT_EQ(fake::files.at(snapshotPath())->bytes.size(), SNAPSHOT_HEADER_BYTES + 3 * 48);

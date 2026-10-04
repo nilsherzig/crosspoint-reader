@@ -500,20 +500,20 @@ bool importDeck(const char* sourcePath, const uint64_t key, const uint64_t sourc
     }
 
     if (rowNumber == 1) {
+      size_t frontColumns = 0;
+      size_t backColumns = 0;
       for (size_t i = 0; i < fields.size(); ++i) {
         if (fields[i] == "front") {
-          if (frontIndex != std::numeric_limits<size_t>::max()) ok = false;
+          ++frontColumns;
           frontIndex = i;
         } else if (fields[i] == "back") {
-          if (backIndex != std::numeric_limits<size_t>::max()) ok = false;
+          ++backColumns;
           backIndex = i;
         }
       }
-      if (!ok || frontIndex == std::numeric_limits<size_t>::max() || backIndex == std::numeric_limits<size_t>::max()) {
-        error = "CSV header must contain one front and one back column";
-        ok = false;
-      }
-      continue;
+      if (frontColumns == 1 && backColumns == 1) continue;
+      frontIndex = 0;
+      backIndex = 1;
     }
 
     bool emptyRow = true;

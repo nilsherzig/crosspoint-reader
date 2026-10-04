@@ -6,7 +6,14 @@ Flashcards are an Xteink X4 Pro-only application. The feature is omitted from ot
 
 Create `/flashcards/` on the SD card and place one or more `.csv` files directly in it. Each file is one deck; subdirectories are not scanned. The filename without `.csv` is the displayed deck name.
 
-CSV files are UTF-8 RFC 4180 with a required header containing exactly one `front` and one `back` column:
+CSV files are UTF-8 RFC 4180. Without a header, the first two columns are the front and back, and the first row is a card:
+
+```csv
+"What is 2 + 2?",4
+"A field may contain commas","and escaped ""quotes"""
+```
+
+An optional first-row header containing exactly one `front` and one `back` column selects those columns by name, allowing them to be reordered:
 
 ```csv
 front,back
