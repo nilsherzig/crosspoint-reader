@@ -22,29 +22,32 @@ struct UiScreen {
   }
 };
 struct UiListActivity {
+  enum class ListSelectionOffset { None, TabBar };
   fui::ListNav nav;
   int count = 16;
   fui::ListNav& activeNav() { return nav; }
   int listCount() const { return count; }
-  void syncListViewport(UiScreen&, fui::ListProps&, int = 0);
+  void syncListViewport(UiScreen&, fui::ListProps&, ListSelectionOffset = ListSelectionOffset::None);
 };
 """ + method + r"""
 int main() {
-  for (int offset : {0, 1}) {
+  for (auto selectionOffset : {UiListActivity::ListSelectionOffset::None,
+                               UiListActivity::ListSelectionOffset::TabBar}) {
+    const int offset = static_cast<int>(selectionOffset);
     UiListActivity activity;
     UiScreen screen;
     fui::ListProps props;
     auto& nav = activity.nav;
     nav.reset(offset);
-    activity.syncListViewport(screen, props, offset);
+    activity.syncListViewport(screen, props, selectionOffset);
     nav.onListRendered(0, 4, true);
     nav.requestScroll(4);
-    activity.syncListViewport(screen, props, offset);
+    activity.syncListViewport(screen, props, selectionOffset);
     assert(nav.top == 4 && props.topIndex == 4 && nav.selected == offset);
     nav.onListRendered(4, 4, false);
     nav.selected = 5 + offset;
     nav.requestScroll(-4);
-    activity.syncListViewport(screen, props, offset);
+    activity.syncListViewport(screen, props, selectionOffset);
     assert(nav.top == 0 && props.topIndex == 0 && nav.selected == 5 + offset);
 
     // Wrapped settings rows: button follow must preserve the measured viewport
@@ -54,7 +57,7 @@ int main() {
     nav.onListRendered(2, 3, true);
     nav.drawnCount = 6;
     nav.requestSelection(3 + offset);
-    activity.syncListViewport(screen, props, offset);
+    activity.syncListViewport(screen, props, selectionOffset);
     assert(nav.top == 2 && props.topIndex == 2);
   }
 }
