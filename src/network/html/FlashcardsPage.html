@@ -460,7 +460,8 @@
     // Enter moves from the front to the back and submits from the back; Ctrl/Cmd+Enter always submits.
     function wireCardKeys(front, back, submit) {
       const onKey = (event) => {
-        if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+        // keyCode 229: Safari reports the Enter that confirms an IME composition this way.
+        if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
         event.preventDefault();
         if (event.target === front && !event.ctrlKey && !event.metaKey) back.focus();
         else submit();
@@ -538,18 +539,21 @@
     }
 
     // Replaces the open deck on the device, then in memory. `cards` is a changed copy.
+    // A confirm dialog stays open across navigation, so the deck is checked again after each one.
     async function saveCards(cards, doneText) {
-      if (deck.extraColumns && !(await showWebConfirm('Saving removes the extra columns of this file. Continue?'))) {
+      const target = deck;
+      if (target.extraColumns && !(await showWebConfirm('Saving removes the extra columns of this file. Continue?'))) {
         return false;
       }
-      const target = deck;
+      if (deck !== target) return false;
       const saved = await runExclusive(async () => {
         await uploadDeck(target.file, cards, true);
         target.cards = cards;
         target.extraColumns = false;
       });
       if (saved) showWebToast(doneText, false);
-      if (deck === target) renderDeck();
+      // A failed save keeps the page as it is, including text typed into an open edit.
+      if (saved && deck === target) renderDeck();
       return saved;
     }
 
@@ -609,7 +613,9 @@
 
     async function deleteCard(index) {
       if (busy) return;
+      const target = deck;
       if (!(await showWebConfirm('Delete this card? Its review history is kept but not used.'))) return;
+      if (deck !== target) return;
       const cards = deck.cards.slice();
       cards.splice(index, 1);
       editing = -1;
