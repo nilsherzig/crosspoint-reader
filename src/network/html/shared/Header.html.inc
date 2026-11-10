@@ -16,6 +16,7 @@
       <a href="/files">File Manager</a>
       <a href="/settings">Settings</a>
       <a href="/fonts">Fonts</a>
+      <a href="/flashcards">Flashcards</a>
       <a href="/plugins">Plugins</a>
     </nav>
   </div>
@@ -32,6 +33,7 @@
       <a href="/files">File Manager</a>
       <a href="/settings">Settings</a>
       <a href="/fonts">Fonts</a>
+      <a href="/flashcards">Flashcards</a>
       <a href="/plugins">Plugins</a>
     </nav>
   </details>
@@ -39,6 +41,10 @@
     // The server sets cpPlugins=1 on every page while plugins are enabled.
     if (!document.cookie.split('; ').includes('cpPlugins=1')) {
       document.querySelectorAll('.brand a[href="/plugins"]').forEach((a) => a.remove());
+    }
+    // Only builds with the flashcard app set cpFlashcards=1.
+    if (!document.cookie.split('; ').includes('cpFlashcards=1')) {
+      document.querySelectorAll('.brand a[href="/flashcards"]').forEach((a) => a.remove());
     }
   </script>
 </header>

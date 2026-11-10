@@ -64,6 +64,15 @@
 #include "util/TaskWatchdog.h"
 #include "util/UrlUtils.h"
 
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include <FlashcardStore.h>
+
+#include "html/FlashcardsPageHtml.generated.h"
+#define CROSSPOINT_FLASHCARDS 1
+#else
+#define CROSSPOINT_FLASHCARDS 0
+#endif
+
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
                               const char* contentType);
 
@@ -262,6 +271,14 @@ void CrossPointWebServer::begin() {
   server->on("/settings", HTTP_GET, [this] { handleSettingsPage(); });
   server->on("/api/settings", HTTP_GET, [this] { handleGetSettings(); });
   server->on("/api/settings", HTTP_POST, [this] { handlePostSettings(); });
+
+#if CROSSPOINT_FLASHCARDS
+  // The page edits deck CSVs through /api/files, /download, /upload, /mkdir and /delete.
+  server->on("/flashcards", HTTP_GET, [this] {
+    sendStaticContent(server.get(), FlashcardsPageHtml, sizeof(FlashcardsPageHtml), FlashcardsPageHtmlETag,
+                      "text/html");
+  });
+#endif
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
@@ -507,6 +524,10 @@ static void sendStaticContent(WebServer* server, const char* data, size_t len, c
     // stays current on every navigation without an extra request.
     server->sendHeader("Set-Cookie", SETTINGS.pluginsEnabled ? "cpPlugins=1; Path=/; SameSite=Strict"
                                                              : "cpPlugins=0; Path=/; SameSite=Strict");
+#if CROSSPOINT_FLASHCARDS
+    // Same mechanism for the Flashcards link, which only X4 Pro builds serve.
+    server->sendHeader("Set-Cookie", "cpFlashcards=1; Path=/; SameSite=Strict");
+#endif
   }
   // Content is baked into flash at build time, so the ETag is stable for the
   // lifetime of a firmware image. Honor If-None-Match with a 304 so browsers
@@ -1024,6 +1045,9 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         filePath += state.fileName;
         clearBookCache(filePath.c_str());
         if (library::isLibraryBookFile(filePath.c_str())) library::markLibraryIndexDirty();
+#if CROSSPOINT_FLASHCARDS
+        flashcards::FlashcardStore::invalidateDeckCache(filePath.c_str());
+#endif
       }
     }
     state.buffer.reset();
@@ -3015,6 +3039,9 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         filePath += wsUploadFileName;
         clearBookCache(filePath.c_str());
         if (library::isLibraryBookFile(filePath.c_str())) library::markLibraryIndexDirty();
+#if CROSSPOINT_FLASHCARDS
+        flashcards::FlashcardStore::invalidateDeckCache(filePath.c_str());
+#endif
 
         wsServer->sendTXT(num, "DONE");
         wsLastProgressSent = 0;

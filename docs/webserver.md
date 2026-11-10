@@ -79,7 +79,7 @@ OPDS server.
 
 ## Web Interface
 
-The browser UI has five primary pages.
+The browser UI has five primary pages, plus Flashcards on the X4 Pro.
 
 ### Home
 
@@ -134,6 +134,12 @@ Copy them into `/fonts/` or `/.fonts/` on the SD card. The Fonts page and
 [SD card font guide](./sd-card-fonts.md) for the direct font folder layout.
 To remove a loose direct font, delete its file from the SD card. The Fonts page
 can delete a family stored in a subfolder.
+
+### Flashcards (X4 Pro)
+
+On the Xteink X4 Pro, the Flashcards page creates and deletes decks and adds,
+edits, and deletes cards. See [flashcards.md](flashcards.md#edit-decks-in-the-web-interface).
+Other devices do not have this page.
 
 ### Plugins
 

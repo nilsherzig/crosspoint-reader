@@ -21,6 +21,26 @@ front,back
 "A field may contain commas","and escaped ""quotes"""
 ```
 
+## Edit decks in the web interface
+
+On the X4 Pro, the reader's web interface (File Transfer) has a **Flashcards** page.
+
+The first view lists the decks in `/flashcards/`. It creates and deletes decks; selecting a deck opens it. Creating a deck never replaces an existing file. Deleting a deck removes only its CSV: the history journal stays on the SD card, so a deck created again with the same name continues with the old progress for identical cards. Decks cannot be renamed on the page because the file name is the deck identity.
+
+An open deck has three tabs, and only one is shown at a time:
+
+- **Add** has a front and a back field. Enter in the front field moves to the back field, Enter in the back field adds the card, Shift+Enter starts a new line, and Ctrl+Enter (Cmd+Enter) adds the card from either field. After a card is added the fields are empty again and the front field has the focus.
+- **Paste several** takes CSV rows (`front,back`, with or without the header row). Cards already in the deck are skipped. The whole paste is rejected, and nothing is added, when a row has a missing side, a non-empty third column, a side over 16 KiB, or a CSV syntax error, or when the deck would exceed 2,000 cards.
+- **Cards** lists the deck with a search field. A card can be edited in place or deleted. Saving an edit without a change does nothing.
+
+The page does all CSV work in the browser. For every change it uploads the complete deck file through the existing `/upload` endpoint. The reader writes the upload to a temporary file first and swaps it in only when it is complete; if that last swap fails, the new deck can be left as `<name>.csv.part`. The reader then drops that deck's card cache, so the next visit to the deck list reparses it. Because a card is identified by its text (see [Identity, import, and persistence](#identity-import-and-persistence)), untouched cards keep their progress, an edited card becomes a new card, and a deleted card leaves the deck while its history stays in the journal.
+
+The page always writes a normalized file: a `front,back` header and both fields quoted. Columns other than `front` and `back` are removed on the first save, after a confirmation. Text typed or pasted on the page is trimmed at both ends; cards already in the file are written back unchanged.
+
+The same change can be scripted: upload a complete CSV with `curl -F "file=@deck.csv" "http://<reader>/upload?path=/flashcards&overwrite=1"`.
+
+## CSV details
+
 A UTF-8 BOM is accepted. Quoted commas, quotes, CRLF, and embedded newlines are supported. Other columns are parsed but ignored. Empty rows are ignored; every card row must have non-empty front and back fields. A duplicate decoded front/back pair makes the deck invalid.
 
 Limits chosen to bound RAM use are:
@@ -81,7 +101,7 @@ When enabled, the session-complete screen shows the deck's lifetime total of eff
 
 ## Identity, import, and persistence
 
-The CSV is authoritative. Parsed text and fixed-size card records are cached under `/.crosspoint/flashcards/`. A deck is reparsed only when its FAT modification date/time or byte size changes. Cache payloads have CRC-32 protection and are rebuilt from CSV when damaged.
+The CSV is authoritative. Parsed text and fixed-size card records are cached under `/.crosspoint/flashcards/`. A deck is reparsed when its FAT modification date/time or byte size changes, or after a file is written to `/flashcards/` through the web interface upload (HTTP or WebSocket) or WebDAV `PUT`. These cases are explicit because a replaced file can keep both its size and its timestamp. Cache payloads have CRC-32 protection and are rebuilt from CSV when damaged.
 
 A card identity is a deterministic 128-bit fingerprint over the exact decoded front and back byte strings, including whitespace and line endings. Editing either side creates a new card. Removing a row removes it from the active deck, but its history remains. Re-adding identical content to the same deck restores its state.
 
@@ -152,7 +172,7 @@ The following implementation choices were not inherent in the original product r
 - learning steps use strictly increasing whole minutes, with 1–8 steps capped at seven days each;
 - malformed config blocks all study sessions rather than falling back per invalid key;
 - card/deck/row limits are fixed safety bounds;
-- cache invalidation uses FAT timestamp plus size, so an edit preserving both can require touching the file or deleting `/.crosspoint/flashcards/`;
+- cache invalidation uses FAT timestamp plus size, so a change that preserves both and does not go through an upload (USB, or a rename or move in the File Manager or over WebDAV) can require touching the file or deleting `/.crosspoint/flashcards/`;
 - cards are plain text; HTML, Markdown, LaTeX, images, tags, hints, and reverse cards are not interpreted. Write formulas with Unicode characters instead: the card font covers Latin, Cyrillic, Greek, super- and subscripts, arrows (U+2190–21FF), mathematical operators (U+2200–22FF), letterlike symbols such as ℕ ℝ ℤ (U+2100–214F), ⌈⌉⌊⌋, and ⟨⟩. Other characters render as �;
 - only the fixed FSRS-6 weights and the `Again`/`Good` ratings are supported; fuzzing and learning-step delays are deterministic from card identity and review time;
 - review history is never compacted so it remains available for a future optimizer;

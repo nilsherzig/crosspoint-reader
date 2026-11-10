@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flashcards - CrossPoint Reader</title>
+    <style>
+      .fc-meta { color: var(--label-color); font-size: 0.9em; }
+      .fc-deck {
+        flex: 1;
+        min-width: 0;
+        padding: 6px 0;
+        font-size: 1.05em;
+        font-weight: 600;
+        color: var(--font-color);
+        text-decoration: none;
+        overflow-wrap: anywhere;
+      }
+      .fc-deck:hover { color: var(--accent-color); }
+      .fc-back-link { display: inline-block; margin-bottom: 8px; color: var(--accent-color); text-decoration: none; }
+      .fc-form { display: flex; flex-direction: column; gap: 10px; }
+      .fc-form.fc-inline { flex-direction: row; flex-wrap: wrap; margin-top: 12px; }
+      .fc-inline input { flex: 1; min-width: 180px; }
+      .web-ui .fc-form textarea { min-height: 84px; resize: vertical; }
+      .web-ui .fc-paste textarea { min-height: 200px; font-family: monospace; }
+      .fc-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .web-ui .fc-tabs { display: flex; gap: 6px; margin: 4px 0 16px; border-bottom: 1px solid var(--border-color); }
+      .web-ui .fc-tabs button {
+        background: none;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 8px 10px;
+        min-height: 40px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--label-color);
+      }
+      .web-ui .fc-tabs button[aria-selected="true"] { color: var(--accent-color); border-bottom-color: var(--accent-color); }
+      .web-ui #cardFilter { width: 100%; box-sizing: border-box; }
+      .fc-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .fc-answer { color: var(--label-color); margin-top: 4px; }
+      .fc-problem { color: var(--danger-color); font-size: 0.9em; margin-top: 4px; }
+      .fc-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+      .fc-editing { flex: 1; }
+      .fc-notice {
+        background: var(--warning-bg);
+        border: 1px solid var(--warning-border);
+        color: var(--warning-text);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin: 0 0 12px;
+      }
+      .fc-skeleton {
+        height: 40px;
+        margin: 10px 0;
+        border-radius: 8px;
+        background: var(--border-color);
+        animation: fc-pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes fc-pulse { 50% { opacity: 0.45; } }
+      @media (prefers-reduced-motion: reduce) { .fc-skeleton { animation: none; } }
+    </style>
+  <link rel="stylesheet" href="/assets/web.css" />
+  <link rel="icon" type="image/svg+xml" href="/assets/crosspoint-icon.svg" />
+  </head>
+  <body class="web-ui">
+    <!--#include file="shared/Header.html.inc" -->
+<main class="page-content">
+
+    <div class="card" id="listView">
+      <h2>Flashcard decks</h2>
+      <div id="decks" aria-busy="true">
+        <div class="fc-skeleton"></div>
+        <div class="fc-skeleton"></div>
+      </div>
+      <form class="fc-form fc-inline" id="deckForm">
+        <input type="text" id="deckName" placeholder="New deck name" aria-label="New deck name" maxlength="60" required />
+        <button type="submit" class="btn btn-primary">Create deck</button>
+      </form>
+    </div>
+
+    <div class="card" id="deckView" hidden>
+      <a class="fc-back-link" href="#">&larr; All decks</a>
+      <h2 id="deckTitle"></h2>
+      <div id="deckLoading">
+        <div class="fc-skeleton"></div>
+        <div class="fc-skeleton"></div>
+      </div>
+      <div id="deckBody" hidden>
+        <p class="fc-notice" id="deckNotice" hidden></p>
+        <div class="fc-tabs" role="tablist">
+          <button type="button" role="tab" id="tabAdd" data-panel="panelAdd">Add</button>
+          <button type="button" role="tab" id="tabPaste" data-panel="panelPaste">Paste several</button>
+          <button type="button" role="tab" id="tabCards" data-panel="panelCards">Cards</button>
+        </div>
+
+        <div id="panelAdd" role="tabpanel" aria-labelledby="tabAdd">
+          <form class="fc-form" id="cardForm">
+            <textarea id="cardFront" placeholder="Front" aria-label="Front" enterkeyhint="next" required></textarea>
+            <textarea id="cardBack" placeholder="Back" aria-label="Back" enterkeyhint="done" required></textarea>
+            <div class="fc-actions">
+              <button type="submit" class="btn btn-primary">Add card</button>
+              <span class="fc-meta">Enter moves to the back, then adds the card. Shift+Enter starts a new line.</span>
+            </div>
+          </form>
+        </div>
+
+        <div id="panelPaste" role="tabpanel" aria-labelledby="tabPaste" hidden>
+          <p class="fc-meta" style="margin: 0 0 10px;">
+            One card per row, written as CSV: <code>front,back</code>. Put a side in double quotes when it contains
+            a comma, a quote (write it twice) or a line break. Cards that are already in the deck are skipped.
+          </p>
+          <form class="fc-form fc-paste" id="bulkForm">
+            <textarea id="bulkText" aria-label="Cards as CSV" spellcheck="false" required
+              placeholder="&quot;What is 2 + 2?&quot;,4&#10;Capital of France,Paris"></textarea>
+            <div class="fc-actions"><button type="submit" class="btn btn-primary">Add cards</button></div>
+          </form>
+        </div>
+
+        <div id="panelCards" role="tabpanel" aria-labelledby="tabCards" hidden>
+          <input type="text" id="cardFilter" placeholder="Search cards" aria-label="Search cards" />
+          <p class="fc-meta" id="cardCount" style="margin: 8px 0 0;"></p>
+          <div id="cards"></div>
+        </div>
+      </div>
+    </div>
+
+    </main>
+<!--#include file="shared/Footer.html.inc" -->
+  <script>
+    // Decks are the CSV files in /flashcards. This page rewrites a whole CSV for every change; the
+    // reader keys learning progress on the card text, so untouched cards keep theirs.
+    // The URL hash selects the view: empty for the deck list, a deck file name for that deck.
+    const DECK_DIR = '/flashcards';
+    // Limits enforced by the reader's importer (lib/Flashcards).
+    const MAX_DECKS = 32;
+    const MAX_CARDS = 2000;
+    const MAX_FIELD_BYTES = 16384;
+    const utf8 = new TextEncoder();
+
+    let deckFiles = [];
+    let deck = null; // { file, cards: [{front, back}], extraColumns }
+    let editing = -1; // index of the card being edited in the Cards tab
+    let busy = false;
+    let routeToken = 0;
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function element(tag, className, text) {
+      const el = document.createElement(tag);
+      if (className) el.className = className;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    }
+
+    function showEmpty(container, text) {
+      container.replaceChildren(element('p', 'empty-state', text));
+    }
+
+    function deckTitle(file) {
+      return file.slice(0, -4);
+    }
+
+    // Mirrors CsvReader::readRow: RFC 4180 with CR, LF or CRLF row ends and an optional BOM.
+    function parseCsv(text) {
+      const rows = [];
+      let i = 0;
+      if (text.charCodeAt(0) === 0xfeff) i = 1;
+      const n = text.length;
+      while (i < n) {
+        const row = [];
+        let field = '';
+        let started = false;
+        let rowDone = false;
+        while (!rowDone) {
+          if (i >= n) {
+            row.push(field);
+            break;
+          }
+          const c = text[i++];
+          if (c === '"') {
+            if (started) throw new Error('Row ' + (rows.length + 1) + ': quote inside an unquoted field');
+            for (;;) {
+              if (i >= n) throw new Error('Row ' + (rows.length + 1) + ': quoted field is not closed');
+              const q = text[i++];
+              if (q !== '"') {
+                field += q;
+              } else if (text[i] === '"') {
+                field += '"';
+                i++;
+              } else {
+                break;
+              }
+            }
+            const after = text[i];
+            if (i < n && after !== ',' && after !== '\n' && after !== '\r') {
+              throw new Error('Row ' + (rows.length + 1) + ': unexpected text after a quoted field');
+            }
+            started = true;
+          } else if (c === ',') {
+            row.push(field);
+            field = '';
+            started = false;
+          } else if (c === '\n' || c === '\r') {
+            if (c === '\r' && text[i] === '\n') i++;
+            row.push(field);
+            rowDone = true;
+          } else {
+            field += c;
+            started = true;
+          }
+        }
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    // Mirrors the header and empty-row rules of importDeck.
+    function rowsToDeck(rows) {
+      let front = 0;
+      let back = 1;
+      let first = 0;
+      if (rows.length > 0) {
+        const header = rows[0];
+        const fronts = header.filter((f) => f === 'front').length;
+        const backs = header.filter((f) => f === 'back').length;
+        if (fronts === 1 && backs === 1) {
+          front = header.indexOf('front');
+          back = header.indexOf('back');
+          first = 1;
+        }
+      }
+      const cards = [];
+      let extraColumns = first === 1 && rows[0].length > 2;
+      for (let r = first; r < rows.length; r++) {
+        const row = rows[r];
+        if (row.every((f) => f === '')) continue;
+        const extra = row.some((f, index) => f !== '' && index !== front && index !== back);
+        if (extra) extraColumns = true;
+        cards.push({ front: row[front] || '', back: row[back] || '', row: r + 1, extra: extra });
+      }
+      return { cards: cards, extraColumns: extraColumns };
+    }
+
+    function quoteField(text) {
+      return '"' + text.split('"').join('""') + '"';
+    }
+
+    function cardsToCsv(cards) {
+      let csv = 'front,back\n';
+      for (const card of cards) csv += quoteField(card.front) + ',' + quoteField(card.back) + '\n';
+      return csv;
+    }
+
+    function cardKey(card) {
+      return JSON.stringify([card.front, card.back]);
+    }
+
+    // Returns why the reader would reject this card, or '' when it is fine.
+    function cardProblem(card, others) {
+      if (card.front === '' || card.back === '') return 'Front and back are both required.';
+      if (utf8.encode(card.front).length > MAX_FIELD_BYTES || utf8.encode(card.back).length > MAX_FIELD_BYTES) {
+        return 'Each side is limited to ' + MAX_FIELD_BYTES + ' bytes.';
+      }
+      const key = cardKey(card);
+      if (others.some((other) => cardKey(other) === key)) return 'The deck already has this exact card.';
+      return '';
+    }
+
+    // One pass over the deck; index -> problem text for the cards the reader would reject.
+    function deckProblems(cards) {
+      const problems = new Map();
+      const seen = new Set();
+      cards.forEach((card, index) => {
+        let problem = cardProblem(card, []);
+        const key = cardKey(card);
+        if (!problem && seen.has(key)) problem = 'The deck already has this exact card.';
+        seen.add(key);
+        if (problem) problems.set(index, problem);
+      });
+      return problems;
+    }
+
+    async function responseError(res) {
+      const text = await res.text().catch(() => '');
+      return new Error(text || 'HTTP ' + res.status);
+    }
+
+    async function fetchDeckFiles() {
+      const res = await fetch('/api/files?path=' + encodeURIComponent(DECK_DIR));
+      if (!res.ok) throw await responseError(res);
+      const entries = await res.json();
+      return entries
+        .filter((entry) => !entry.isDirectory && entry.name.toLowerCase().endsWith('.csv') && entry.name.length > 4)
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    }
+
+    async function fetchDeck(file) {
+      const res = await fetch('/download?path=' + encodeURIComponent(DECK_DIR + '/' + file));
+      if (!res.ok) throw await responseError(res);
+      const bytes = await res.arrayBuffer();
+      let text;
+      try {
+        text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      } catch (e) {
+        throw new Error('The file is not valid UTF-8.');
+      }
+      const parsed = rowsToDeck(parseCsv(text));
+      return { file: file, cards: parsed.cards, extraColumns: parsed.extraColumns };
+    }
+
+    // Without `overwrite` the reader refuses to replace an existing file, so creating a deck can
+    // never empty one this page does not know about.
+    async function uploadDeck(file, cards, overwrite) {
+      const body = new FormData();
+      body.append('file', new Blob([cardsToCsv(cards)], { type: 'text/csv' }), file);
+      const query = (overwrite ? 'overwrite=1&' : '') + 'path=' + encodeURIComponent(DECK_DIR);
+      const res = await fetch('/upload?' + query, { method: 'POST', body: body });
+      if (!res.ok) throw await responseError(res);
+    }
+
+    function postForm(url, fields) {
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(fields).toString()
+      });
+    }
+
+    // Runs one device operation at a time and reports failures in a toast.
+    async function runExclusive(action) {
+      if (busy) return false;
+      busy = true;
+      try {
+        await action();
+        return true;
+      } catch (e) {
+        showWebToast(e.message, true);
+        return false;
+      } finally {
+        busy = false;
+      }
+    }
+
+    // ---- Deck list ----
+
+    function renderDecks() {
+      const container = $('decks');
+      container.removeAttribute('aria-busy');
+      if (deckFiles.length === 0) {
+        showEmpty(container, 'No decks yet. Create one below.');
+        return;
+      }
+      container.replaceChildren();
+      for (const file of deckFiles) {
+        const row = element('div', 'family');
+        const open = element('a', 'fc-deck', deckTitle(file));
+        open.href = '#' + encodeURIComponent(file);
+        const remove = element('button', 'delete-btn-cancel', 'Delete');
+        remove.addEventListener('click', () => deleteDeck(file));
+        row.append(open, remove);
+        container.appendChild(row);
+      }
+    }
+
+    async function refreshDecks() {
+      try {
+        deckFiles = await fetchDeckFiles();
+        renderDecks();
+      } catch (e) {
+        $('decks').removeAttribute('aria-busy');
+        showEmpty($('decks'), 'Failed to load decks');
+      }
+    }
+
+    // Returns why a deck name cannot be used as a FAT file name, or ''.
+    function deckNameProblem(name) {
+      if (name === '') return 'Enter a deck name.';
+      if (name.startsWith('.') || name.endsWith('.')) return 'A deck name cannot start or end with a dot.';
+      for (const c of name) {
+        if (c < ' ' || '/\\:*?"<>|'.includes(c)) return 'A deck name cannot contain / \\ : * ? " < > |';
+      }
+      const file = (name + '.csv').toLowerCase();
+      if (deckFiles.some((other) => other.toLowerCase() === file)) return 'A deck with this name already exists.';
+      if (deckFiles.length >= MAX_DECKS) return 'The reader shows at most ' + MAX_DECKS + ' decks.';
+      return '';
+    }
+
+    $('deckForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = $('deckName').value.trim();
+      const problem = deckNameProblem(name);
+      if (problem) {
+        showWebToast(problem, true);
+        return;
+      }
+      const file = name + '.csv';
+      const created = await runExclusive(async () => {
+        // The reader creates this folder when Flashcards is first opened; it may not exist yet.
+        // A failure here (the folder exists) is expected, and a real one fails the upload below.
+        await postForm('/mkdir', { name: DECK_DIR.slice(1), path: '/' });
+        await uploadDeck(file, [], false);
+      });
+      if (!created) return;
+      $('deckName').value = '';
+      location.hash = '#' + encodeURIComponent(file);
+    });
+
+    async function deleteDeck(file) {
+      if (busy) return;
+      const question = 'Delete the deck "' + deckTitle(file) + '" and all its cards? The review history is kept.';
+      if (!(await showWebConfirm(question))) return;
+      const deleted = await runExclusive(async () => {
+        const res = await postForm('/delete', { path: DECK_DIR + '/' + file });
+        if (!res.ok) throw await responseError(res);
+      });
+      if (deleted) showWebToast('Deleted "' + deckTitle(file) + '".', false);
+      await refreshDecks();
+    }
+
+    // ---- Deck view ----
+
+    function showTab(tab) {
+      for (const button of document.querySelectorAll('.fc-tabs button')) {
+        const selected = button === tab;
+        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+        $(button.dataset.panel).hidden = !selected;
+      }
+      if (tab !== $('tabCards')) editing = -1;
+      renderCards();
+    }
+
+    for (const button of document.querySelectorAll('.fc-tabs button')) {
+      button.addEventListener('click', () => showTab(button));
+    }
+
+    function renderDeck() {
+      const problems = deckProblems(deck.cards);
+      const notices = [];
+      if (problems.size > 0) {
+        notices.push(problems.size + ' card(s) are marked in the Cards tab. The reader rejects the whole deck until they are fixed or deleted.');
+      }
+      if (deck.cards.length > MAX_CARDS) {
+        notices.push('The reader accepts at most ' + MAX_CARDS + ' cards per deck.');
+      }
+      if (deck.extraColumns) {
+        notices.push('This file has columns other than front and back. Saving a change here removes them.');
+      }
+      $('deckNotice').hidden = notices.length === 0;
+      $('deckNotice').textContent = notices.join(' ');
+      $('tabCards').textContent = 'Cards (' + deck.cards.length + ')';
+      renderCards(problems);
+    }
+
+    // Enter moves from the front to the back and submits from the back; Ctrl/Cmd+Enter always submits.
+    function wireCardKeys(front, back, submit) {
+      const onKey = (event) => {
+        // keyCode 229: Safari reports the Enter that confirms an IME composition this way.
+        if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        if (event.target === front && !event.ctrlKey && !event.metaKey) back.focus();
+        else submit();
+      };
+      front.addEventListener('keydown', onKey);
+      back.addEventListener('keydown', onKey);
+    }
+
+    function cardRow(card, index, problem) {
+      const row = element('div', 'family');
+      if (index === editing) {
+        const form = element('form', 'fc-form fc-editing');
+        const front = element('textarea');
+        front.value = card.front;
+        front.setAttribute('aria-label', 'Front');
+        const back = element('textarea');
+        back.value = card.back;
+        back.setAttribute('aria-label', 'Back');
+        const actions = element('div', 'fc-actions');
+        const save = element('button', 'btn btn-primary', 'Save');
+        save.type = 'submit';
+        const cancel = element('button', 'delete-btn-cancel', 'Cancel');
+        cancel.type = 'button';
+        cancel.addEventListener('click', () => {
+          editing = -1;
+          renderCards();
+        });
+        actions.append(save, cancel, element('span', 'fc-meta', 'A changed card is a new card: its progress starts again.'));
+        form.append(front, back, actions);
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          saveEdit(index, front.value, back.value);
+        });
+        wireCardKeys(front, back, () => form.requestSubmit());
+        row.appendChild(form);
+        return row;
+      }
+      const info = element('div', 'family-info');
+      info.appendChild(element('div', 'fc-text', card.front));
+      info.appendChild(element('div', 'fc-text fc-answer', card.back));
+      if (problem) info.appendChild(element('div', 'fc-problem', problem));
+      const actions = element('div', 'fc-row-actions');
+      const edit = element('button', 'delete-btn-cancel', 'Edit');
+      edit.addEventListener('click', () => {
+        // A save in progress may shift the indexes this row was built with.
+        if (busy) return;
+        editing = index;
+        renderCards();
+        const field = $('cards').querySelector('textarea');
+        if (field) field.focus();
+      });
+      const remove = element('button', 'delete-btn-cancel', 'Delete');
+      remove.addEventListener('click', () => deleteCard(index));
+      actions.append(edit, remove);
+      row.append(info, actions);
+      return row;
+    }
+
+    // The card list is only built while its tab is open.
+    function renderCards(knownProblems) {
+      if (!deck || $('panelCards').hidden) return;
+      const problems = knownProblems || deckProblems(deck.cards);
+      const filter = $('cardFilter').value.trim().toLowerCase();
+      const container = $('cards');
+      container.replaceChildren();
+      let shown = 0;
+      deck.cards.forEach((card, index) => {
+        const matches = card.front.toLowerCase().includes(filter) || card.back.toLowerCase().includes(filter);
+        if (filter && !matches && index !== editing) return;
+        shown++;
+        container.appendChild(cardRow(card, index, problems.get(index)));
+      });
+      if (shown === 0) showEmpty(container, deck.cards.length === 0 ? 'No cards yet' : 'No cards match the search');
+      $('cardCount').textContent = filter ? shown + ' of ' + deck.cards.length + ' cards' : '';
+    }
+
+    // Replaces the open deck on the device, then in memory. `cards` is a changed copy.
+    // A confirm dialog stays open across navigation, so the deck is checked again after each one.
+    async function saveCards(cards, doneText) {
+      const target = deck;
+      if (target.extraColumns && !(await showWebConfirm('Saving removes the extra columns of this file. Continue?'))) {
+        return false;
+      }
+      if (deck !== target) return false;
+      const saved = await runExclusive(async () => {
+        await uploadDeck(target.file, cards, true);
+        target.cards = cards;
+        target.extraColumns = false;
+      });
+      if (saved) showWebToast(doneText, false);
+      // A failed save keeps the page as it is, including text typed into an open edit.
+      if (saved && deck === target) renderDeck();
+      return saved;
+    }
+
+    function asTyped(text) {
+      return text.split('\r\n').join('\n').trim();
+    }
+
+    // Checks a typed card against the rest of the deck and reports the problem. Returns the card or null.
+    function typedCard(frontText, backText, skipIndex) {
+      const card = { front: frontText.trim(), back: backText.trim() };
+      const others = deck.cards.filter((other, index) => index !== skipIndex);
+      const problem = cardProblem(card, others);
+      if (problem) {
+        showWebToast(problem, true);
+        return null;
+      }
+      return card;
+    }
+
+    $('cardForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (busy || !deck) return;
+      const card = typedCard($('cardFront').value, $('cardBack').value, -1);
+      if (!card) return;
+      if (deck.cards.length >= MAX_CARDS) {
+        showWebToast('A deck is limited to ' + MAX_CARDS + ' cards.', true);
+        return;
+      }
+      if (await saveCards(deck.cards.concat([card]), 'Card added.')) {
+        $('cardForm').reset();
+        $('cardFront').focus();
+      }
+    });
+
+    wireCardKeys($('cardFront'), $('cardBack'), () => $('cardForm').requestSubmit());
+
+    async function saveEdit(index, frontText, backText) {
+      if (busy) return;
+      const card = typedCard(frontText, backText, index);
+      if (!card) return;
+      // Typed text is trimmed and the text area turns CRLF into LF; that alone must not make a new card.
+      const stored = deck.cards[index];
+      const shown = { front: asTyped(stored.front), back: asTyped(stored.back) };
+      if (cardKey(card) === cardKey(shown)) {
+        editing = -1;
+        renderCards();
+        return;
+      }
+      const cards = deck.cards.slice();
+      cards[index] = card;
+      const target = deck;
+      if ((await saveCards(cards, 'Card saved as a new card.')) && deck === target) {
+        editing = -1;
+        renderCards();
+      }
+    }
+
+    async function deleteCard(index) {
+      if (busy) return;
+      const target = deck;
+      if (!(await showWebConfirm('Delete this card? Its review history is kept but not used.'))) return;
+      if (deck !== target) return;
+      const cards = deck.cards.slice();
+      cards.splice(index, 1);
+      editing = -1;
+      await saveCards(cards, 'Card deleted.');
+    }
+
+    $('cardFilter').addEventListener('input', () => renderCards());
+
+    // Adds every pasted CSV row that is not in the deck yet. One bad row rejects the whole paste, so
+    // nothing is half-added.
+    $('bulkForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (busy || !deck) return;
+      let pasted;
+      try {
+        pasted = rowsToDeck(parseCsv($('bulkText').value)).cards;
+      } catch (e) {
+        showWebToast(e.message, true);
+        return;
+      }
+      const cards = deck.cards.slice();
+      const seen = new Set(cards.map(cardKey));
+      let skipped = 0;
+      for (const row of pasted) {
+        const card = { front: row.front.trim(), back: row.back.trim() };
+        // A third column is nearly always an unquoted comma inside a side.
+        const problem = row.extra
+          ? 'More than two columns. Put a side that contains a comma in double quotes.'
+          : cardProblem(card, []);
+        if (problem) {
+          showWebToast('Row ' + row.row + ': ' + problem, true);
+          return;
+        }
+        const key = cardKey(card);
+        if (seen.has(key)) {
+          skipped++;
+          continue;
+        }
+        seen.add(key);
+        cards.push(card);
+      }
+      const added = cards.length - deck.cards.length;
+      const summary = added + ' card(s) added' + (skipped ? ', ' + skipped + ' duplicate(s) skipped.' : '.');
+      if (added === 0) {
+        showWebToast(pasted.length === 0 ? 'No cards found in the text.' : summary, pasted.length === 0);
+        return;
+      }
+      if (cards.length > MAX_CARDS) {
+        showWebToast('A deck is limited to ' + MAX_CARDS + ' cards.', true);
+        return;
+      }
+      if (await saveCards(cards, summary)) $('bulkText').value = '';
+    });
+
+    // ---- Views ----
+
+    function hashFile() {
+      try {
+        return decodeURIComponent(location.hash.slice(1));
+      } catch (e) {
+        return '';
+      }
+    }
+
+    async function route() {
+      const token = ++routeToken;
+      const file = hashFile();
+      $('listView').hidden = file !== '';
+      $('deckView').hidden = file === '';
+      if (file === '') {
+        deck = null;
+        await refreshDecks();
+        return;
+      }
+      deck = null;
+      editing = -1;
+      $('deckTitle').textContent = deckTitle(file);
+      $('deckLoading').hidden = false;
+      $('deckBody').hidden = true;
+      let loaded;
+      try {
+        loaded = await fetchDeck(file);
+      } catch (e) {
+        if (token !== routeToken) return;
+        showWebToast('Could not open "' + deckTitle(file) + '": ' + e.message, true);
+        location.hash = '';
+        return;
+      }
+      if (token !== routeToken) return;
+      deck = loaded;
+      $('cardForm').reset();
+      $('bulkText').value = '';
+      $('cardFilter').value = '';
+      $('deckLoading').hidden = true;
+      $('deckBody').hidden = false;
+      showTab($('tabAdd'));
+      renderDeck();
+      // Do not open the on-screen keyboard on touch devices before the user asks for it.
+      if (matchMedia('(pointer: fine)').matches) $('cardFront').focus();
+    }
+
+    window.addEventListener('hashchange', route);
+    route();
+  </script>
+  </body>
+</html>
