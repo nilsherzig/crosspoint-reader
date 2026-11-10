@@ -9,6 +9,10 @@
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
 
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include <FlashcardStore.h>
+#endif
+
 namespace {
 // RFC 1123 date format helper: "Sun, 06 Nov 1994 08:49:37 GMT"
 // ESP32 doesn't have real-time clock set by default, so we use a fixed epoch date
@@ -403,6 +407,9 @@ void WebDAVHandler::handlePut(WebServer& s) {
   }
 
   clearBookCache(path.c_str());
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  flashcards::FlashcardStore::invalidateDeckCache(path.c_str());
+#endif
   s.send(_putExisted ? 204 : 201);
   LOG_DBG("DAV", "PUT complete: %s", path.c_str());
 }

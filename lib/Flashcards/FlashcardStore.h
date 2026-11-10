@@ -103,6 +103,8 @@ class FlashcardStore {
   static bool loadConfig(Config& config, std::string& error);
   static bool saveConfig(const Config& config, std::string& error);
   static bool scanDecks(std::vector<DeckSummary>& decks, bool importMissing = true);
+  // Call after replacing a deck CSV: a rewrite can keep both the size and the FAT time.
+  static void invalidateDeckCache(const char* sourcePath);
   static bool loadStudyQueue(const DeckSummary& deck, int64_t now, const Config& config, StudyQueue& queue,
                              std::string& error, uint16_t additionalNewCards = 0);
   static bool readCardText(const DeckSummary& deck, const StudyCard& card, bool back, std::string& text,

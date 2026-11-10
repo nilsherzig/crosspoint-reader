@@ -19,6 +19,7 @@ the IP address shown on the device screen.
 | `GET` | `/files` | File manager page |
 | `GET` | `/settings` | Web settings page |
 | `GET` | `/fonts` | SD-card font manager page |
+| `GET` | `/flashcards` | Flashcard deck editor (X4 Pro builds only; see [flashcards.md](flashcards.md)) |
 | `GET` | `/plugins` | Plugins page (web settings of SD-card plugins) |
 | `GET` | `/js/jszip.min.js` | JavaScript asset used by the file manager |
 | `GET` | `/js/epub-optimizer.js` | File manager EPUB optimizer, loaded with JSZip only when needed |

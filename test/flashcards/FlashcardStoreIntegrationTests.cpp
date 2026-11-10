@@ -280,6 +280,34 @@ TEST_F(FlashcardStoreIntegrationTest, ChangedCsvInvalidatesSnapshotButKeepsMatch
   expectMatchesFullReplay(restored);
 }
 
+TEST_F(FlashcardStoreIntegrationTest, InvalidatedCacheReparsesSameSizeSameTimeCsv) {
+  const std::string edited = "front,back\nAlpha,One\nBeta,Two\nGamma,Thrxx\n";
+  ASSERT_EQ(edited.size(), sizeof(CSV) - 1);
+  fake::add(CSV_PATH, edited);
+  const auto gamma = flashcards::FlashcardStore::fingerprint("Gamma", "Three");
+  const auto hasGamma = [&](const flashcards::StudyQueue& queue) {
+    return std::any_of(queue.cards.begin(), queue.cards.end(),
+                       [&](const flashcards::StudyCard& card) { return card.fingerprint == gamma; });
+  };
+  flashcards::StudyQueue stale;
+  ASSERT_TRUE(load(stale));
+  EXPECT_TRUE(hasGamma(stale));
+
+  flashcards::FlashcardStore::invalidateDeckCache("/Flashcards/BASIC.CSV");
+  flashcards::StudyQueue fresh;
+  ASSERT_TRUE(load(fresh));
+  EXPECT_EQ(fresh.cards.size(), 3U);
+  EXPECT_FALSE(hasGamma(fresh));
+}
+
+TEST_F(FlashcardStoreIntegrationTest, InvalidateIgnoresPathsThatAreNotTopLevelDecks) {
+  const auto cache = deckFile(deck.key, "cards");
+  flashcards::FlashcardStore::invalidateDeckCache("/books/basic.csv");
+  flashcards::FlashcardStore::invalidateDeckCache("/flashcards/sub/basic.csv");
+  flashcards::FlashcardStore::invalidateDeckCache("/flashcards/basic.txt");
+  EXPECT_EQ(fake::files.count(cache), 1U);
+}
+
 TEST_F(FlashcardStoreIntegrationTest, TruncatedJournalInvalidatesSnapshot) {
   ASSERT_TRUE(seedSnapshot());
   fake::files.at(historyPath())->bytes.resize(60);

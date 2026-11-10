@@ -6,6 +6,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <ObfuscationUtils.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <cctype>
@@ -1227,6 +1228,16 @@ bool FlashcardStore::saveConfig(const Config& config, std::string& error) {
           static_cast<unsigned>(config.relearningSteps.count));
   perf.markSuccess();
   return true;
+}
+
+void FlashcardStore::invalidateDeckCache(const char* sourcePath) {
+  const size_t directoryLength = strlen(SOURCE_DIRECTORY);
+  if (strncasecmp(sourcePath, SOURCE_DIRECTORY, directoryLength) != 0 || sourcePath[directoryLength] != '/') return;
+  const char* fileName = sourcePath + directoryLength + 1;
+  if (strchr(fileName, '/') || !hasCsvExtension(fileName)) return;
+  char cachePath[96];
+  makeCachePath(deckKey(fileName), cachePath, sizeof(cachePath));
+  if (Storage.remove(cachePath)) LOG_DBG(MODULE, "Cache invalidated: path=%s", sourcePath);
 }
 
 bool FlashcardStore::scanDecks(std::vector<DeckSummary>& decks, const bool importMissing) {
