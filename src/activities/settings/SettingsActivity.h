@@ -32,7 +32,6 @@ enum class SettingAction {
   KeyboardLayouts,
   HomeButton,
   About,
-  FlashcardSettings,
 };
 
 struct SettingInfo {
