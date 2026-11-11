@@ -16,6 +16,8 @@ namespace {
 // see FileBrowserActivity's showHiddenFiles check).
 constexpr const char* DICT_ROOTS[] = {"/dictionaries", "/.dictionaries"};
 
+constexpr const char* BOOK_CHOICE_FILE = "/dictionary.txt";
+
 // Find the single .idx stem inside one dictionary folder. Returns false when
 // the folder holds no .idx or more than one distinct stem (ambiguous).
 bool findStem(const char* folderPath, std::string& stemOut) {
@@ -57,12 +59,10 @@ bool findStem(const char* folderPath, std::string& stemOut) {
   return true;
 }
 
-}  // namespace
-
-void discover(std::vector<DictionaryEntry>& out) {
-  out.clear();
-  out.reserve(8);
-
+// Calls visit(name, stem) for each usable dictionary folder, in directory
+// order, until visit returns false.
+template <typename Visit>
+void forEachDictionary(Visit&& visit) {
   for (const char* dictRoot : DICT_ROOTS) {
     auto rootDir = Storage.open(dictRoot);
     if (!rootDir || !rootDir.isDirectory()) {
@@ -79,24 +79,51 @@ void discover(std::vector<DictionaryEntry>& out) {
       std::string folderPath = std::string(dictRoot) + "/" + name;
       std::string stem;
       if (!findStem(folderPath.c_str(), stem)) continue;
-
-      DictionaryEntry e;
-      e.name = name;
-      e.stem = std::move(stem);
-      out.push_back(std::move(e));
-      LOG_DBG("DREG", "Found dictionary: %s", name);
+      if (!visit(name, std::move(stem))) return;
     }
   }
+}
+
+}  // namespace
+
+void discover(std::vector<DictionaryEntry>& out) {
+  out.clear();
+  out.reserve(8);
+
+  forEachDictionary([&out](const char* name, std::string&& stem) {
+    DictionaryEntry e;
+    e.name = name;
+    e.stem = std::move(stem);
+    out.push_back(std::move(e));
+    LOG_DBG("DREG", "Found dictionary: %s", name);
+    return true;
+  });
 
   // Case-insensitive sort by folder name (matches FileBrowserActivity ordering).
-  std::sort(out.begin(), out.end(), [](const DictionaryEntry& a, const DictionaryEntry& b) {
+  // Stable, so a name found in both roots keeps the first root's entry, the one
+  // resolveBasePath() opens; the copy in the second root is dropped.
+  std::stable_sort(out.begin(), out.end(), [](const DictionaryEntry& a, const DictionaryEntry& b) {
     return StringUtils::asciiCaseCmp(a.name.c_str(), b.name.c_str()) < 0;
   });
+  out.erase(std::unique(out.begin(), out.end(),
+                        [](const DictionaryEntry& a, const DictionaryEntry& b) { return a.name == b.name; }),
+            out.end());
+}
+
+size_t count(const size_t limit) {
+  if (limit == 0) return 0;
+  // A name found in both roots is one dictionary, as in discover().
+  std::vector<std::string> seen;
+  forEachDictionary([&seen, limit](const char* name, std::string&&) {
+    if (std::find(seen.begin(), seen.end(), name) == seen.end()) seen.emplace_back(name);
+    return seen.size() < limit;
+  });
+  return seen.size();
 }
 
 bool resolveBasePath(const char* folderName, std::string& basePathOut) {
   if (!folderName || folderName[0] == '\0') return false;
-  // folderName is persisted in the settings JSON: reject separators and dot
+  // folderName is read back from the SD card: reject separators and dot
   // prefixes so a crafted value cannot escape the dictionary roots.
   if (folderName[0] == '.' || strpbrk(folderName, "/\\") != nullptr) return false;
 
@@ -108,6 +135,32 @@ bool resolveBasePath(const char* folderName, std::string& basePathOut) {
     return true;
   }
   return false;
+}
+
+bool loadBookChoice(const std::string& bookCachePath, char* out, const size_t outSize) {
+  if (outSize == 0) return false;
+  out[0] = '\0';
+  HalFile file;
+  if (!Storage.openFileForRead("DREG", bookCachePath + BOOK_CHOICE_FILE, file)) return false;
+  // A read that fills the whole buffer means the name is too long: reject it rather than truncate.
+  const int len = file.read(out, outSize);
+  if (len <= 0 || static_cast<size_t>(len) >= outSize) {
+    out[0] = '\0';
+    return false;
+  }
+  out[len] = '\0';
+  return true;
+}
+
+bool saveBookChoice(const std::string& bookCachePath, const char* folderName) {
+  HalFile file;
+  if (!Storage.openFileForWrite("DREG", bookCachePath + BOOK_CHOICE_FILE, file)) return false;
+  const size_t len = strlen(folderName);
+  if (file.write(folderName, len) != len) {
+    LOG_ERR("DREG", "Failed to save book dictionary choice");
+    return false;
+  }
+  return true;
 }
 
 }  // namespace DictionaryRegistry

@@ -20,7 +20,6 @@
 #include "ReaderLineSpacing.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
-#include "util/DictionaryRegistry.h"
 #include "util/SlideSwitch.h"
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
@@ -141,48 +140,6 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   return s;
 }
 
-// Build the dictionary selection setting dynamically from the folders discovered
-// under /dictionaries. "None" plus one option per dictionary; the selected folder
-// name persists in SETTINGS.dictionaryName (saved/loaded manually in
-// CrossPointSettings::toJson/fromJson — the generic loop skips dynamic entries).
-inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries) {
-  std::vector<std::string> folderNames;
-  folderNames.reserve(dictionaries.size());
-  std::transform(dictionaries.begin(), dictionaries.end(), std::back_inserter(folderNames),
-                 [](const DictionaryEntry& d) { return d.name; });
-
-  SettingInfo s;
-  s.nameId = StrId::STR_DICTIONARY;
-  s.key = "dictionaryName";  // web settings API; persisted by name, not by the generic loop
-  s.type = SettingType::ENUM;
-  s.enumStringValues.reserve(folderNames.size() + 1);
-  s.enumStringValues.push_back(I18N.get(StrId::STR_NONE_OPT));
-  s.enumStringValues.insert(s.enumStringValues.end(), folderNames.begin(), folderNames.end());
-  s.category = StrId::STR_CAT_READER;
-
-  s.valueGetter = [folderNames]() -> uint8_t {
-    for (size_t i = 0; i < folderNames.size(); i++) {
-      // Compare within the settings field capacity: an over-long folder name is
-      // stored truncated, and must still match its list entry.
-      if (strncmp(folderNames[i].c_str(), SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName) - 1) == 0) {
-        return static_cast<uint8_t>(i + 1);
-      }
-    }
-    return 0;  // "None", also when the stored folder no longer exists
-  };
-
-  s.valueSetter = [folderNames](uint8_t v) {
-    if (v == 0 || v > folderNames.size()) {
-      SETTINGS.dictionaryName[0] = '\0';
-      return;
-    }
-    strncpy(SETTINGS.dictionaryName, folderNames[v - 1].c_str(), sizeof(SETTINGS.dictionaryName) - 1);
-    SETTINGS.dictionaryName[sizeof(SETTINGS.dictionaryName) - 1] = '\0';
-  };
-
-  return s;
-}
-
 inline std::vector<StrId> buildLongPressMenuValues() {
   std::vector<StrId> values = {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION,
                                StrId::STR_DICTIONARY};
@@ -289,10 +246,9 @@ void forEachBaseSetting(Fn& fn) {
 // Collects the same descriptors into an owning list for UI and web callers.
 std::vector<SettingInfo> getBaseSettingsList(size_t extraCapacity = 0);
 
-// UI callers own the list for runtime filtering and font/dictionary options.
-inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
-                                                const std::vector<DictionaryEntry>* dictionaries = nullptr) {
-  auto v = getBaseSettingsList(dictionaries && !dictionaries->empty() ? 1 : 0);
+// UI callers own the list for runtime filtering and font options.
+inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr) {
+  auto v = getBaseSettingsList();
   // Frontlit and lightless variants of a board share one binary (EEGO A4);
   // presence is the I2C probe result from Frontlight.begin(). UI-only: the probe
   // has not run at load time, so the base list must keep the persisted key.
@@ -357,12 +313,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     if (it != v.end()) {
       *it = buildFontSizeSetting(registry);
     }
-  }
-  if (dictionaries && !dictionaries->empty()) {
-    // Insert at the end of the Reader category (just before the first Controls entry).
-    auto it =
-        std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
-    v.insert(it, buildDictionarySetting(*dictionaries));
   }
   return v;
 }

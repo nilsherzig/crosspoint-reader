@@ -19,7 +19,8 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
                                                const bool hasFootnotes, const bool hasBookmarks,
-                                               const bool hasClippings, MenuAction& selectedAction)
+                                               const bool hasClippings, const size_t dictionaryCount,
+                                               MenuAction& selectedAction)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
       selectedAction(selectedAction),
       title(title),
@@ -27,7 +28,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {
-  buildMenuItems(menuItems, hasFootnotes, hasBookmarks, hasClippings);
+  buildMenuItems(menuItems, hasFootnotes, hasBookmarks, hasClippings, dictionaryCount);
   buildMenuRowItems();
 }
 
@@ -62,7 +63,8 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
 }
 
 void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, const bool hasFootnotes,
-                                            const bool hasBookmarks, const bool hasClippings) {
+                                            const bool hasBookmarks, const bool hasClippings,
+                                            const size_t dictionaryCount) {
   items.clear();
   items.reserve(MAX_MENU_ITEMS);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
@@ -86,8 +88,11 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, const 
   if (bleturner::status().compiledIn && SETTINGS.ble.peerAddr[0] != '\0') {
     items.push_back({MenuAction::BLUETOOTH, StrId::STR_BT_PAGE_TURNER});
   }
-  if (SETTINGS.dictionaryName[0] != '\0') {
+  if (dictionaryCount > 0) {
     items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
+  }
+  if (dictionaryCount > 1) {
+    items.push_back({MenuAction::CHANGE_DICTIONARY, StrId::STR_CHANGE_DICTIONARY});
   }
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});

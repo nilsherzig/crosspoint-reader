@@ -6,15 +6,23 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <cstring>
+
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "components/UITheme.h"
+#include "util/DictionaryRegistry.h"
 
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
 
 void indexBuildYield(void*) { vTaskDelay(1); }
+
+void copyName(char* out, const size_t outSize, const char* name) {
+  strncpy(out, name, outSize - 1);
+  out[outSize - 1] = '\0';
+}
 
 }  // namespace
 
@@ -23,11 +31,76 @@ void DictionaryWordSelectActivity::onEnter() {
   fontId = SETTINGS.getReaderFontId();
   lookupPending = true;
   popupMsg = StrId::STR_DICT_LOOKING_UP;
-  popup = Popup::Busy;
+  popup = purpose == Purpose::Lookup ? Popup::Busy : Popup::None;
   requestUpdate();
 }
 
+bool DictionaryWordSelectActivity::chooseDictionary() {
+  if (dictName[0] != '\0') return true;
+
+  // A stored choice whose folder was removed counts as no choice.
+  char stored[sizeof(dictName)];
+  std::string basePath;
+  const bool hasStored = DictionaryRegistry::loadBookChoice(bookCachePath, stored, sizeof(stored)) &&
+                         DictionaryRegistry::resolveBasePath(stored, basePath);
+  if (hasStored && purpose == Purpose::Lookup) {
+    copyName(dictName, sizeof(dictName), stored);
+    return true;
+  }
+
+  std::vector<DictionaryEntry> found;
+  DictionaryRegistry::discover(found);
+  if (found.size() < 2) {
+    // Nothing to choose, and nothing is stored, so the book still asks once a
+    // second dictionary is added. With none, open() fails and reports it.
+    if (!found.empty()) copyName(dictName, sizeof(dictName), found.front().name.c_str());
+    return true;
+  }
+
+  if (found.size() > static_cast<size_t>(OptionPopup::MAX_OPTIONS)) {
+    LOG_INF("DICT", "Offering the first %d of %u dictionaries", OptionPopup::MAX_OPTIONS,
+            static_cast<unsigned>(found.size()));
+    found.resize(OptionPopup::MAX_OPTIONS);
+  }
+  int currentIndex = 0;
+  dictChoices.clear();
+  dictChoices.reserve(found.size());
+  for (auto& entry : found) {
+    if (hasStored && entry.name == stored) currentIndex = static_cast<int>(dictChoices.size());
+    dictChoices.push_back(std::move(entry.name));
+  }
+  {
+    RenderLock lock;
+    popup = Popup::None;
+    dictPicker.show(StrId::STR_DICTIONARY, dictChoices, currentIndex, [this](int index) { onDictionaryPicked(index); });
+  }
+  requestUpdate();
+  return false;
+}
+
+void DictionaryWordSelectActivity::onDictionaryPicked(const int index) {
+  if (index < 0 || index >= static_cast<int>(dictChoices.size())) return;
+  copyName(dictName, sizeof(dictName), dictChoices[index].c_str());
+  std::vector<std::string>{}.swap(dictChoices);
+  // A failed save only means the picker asks again next time.
+  if (!DictionaryRegistry::saveBookChoice(bookCachePath, dictName)) {
+    LOG_ERR("DICT", "Could not store the book's dictionary choice");
+  }
+  if (purpose == Purpose::Lookup) {
+    RenderLock lock;
+    popupMsg = StrId::STR_DICT_LOOKING_UP;
+    popup = Popup::Busy;
+  }
+  lookupPending = true;
+}
+
 void DictionaryWordSelectActivity::performLookup() {
+  if (!dictOpenAttempted && !chooseDictionary()) return;
+  // Choosing ends here: the picker was answered, or there was nothing to choose.
+  if (purpose == Purpose::ChooseDictionary) {
+    finish();
+    return;
+  }
   {
     RenderLock lock;
     popupMsg = StrId::STR_DICT_LOOKING_UP;
@@ -35,7 +108,7 @@ void DictionaryWordSelectActivity::performLookup() {
   }
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
-    dictOpenOk = dict.open(SETTINGS.dictionaryName);
+    dictOpenOk = dict.open(dictName);
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.
@@ -126,6 +199,19 @@ void DictionaryWordSelectActivity::performLookup() {
 }
 
 void DictionaryWordSelectActivity::loop() {
+  if (dictPicker.isActive()) {
+    // Repaint only while the dialog is open or a lookup follows; the reader
+    // repaints itself once this activity finishes.
+    dictPicker.handleInput(mappedInput, [this] {
+      if (dictPicker.isActive() || (lookupPending && purpose == Purpose::Lookup)) requestUpdate();
+    });
+    if (!dictPicker.isActive() && !lookupPending) {
+      // Back, or a tap outside the dialog: return to the book without a lookup.
+      result.isCancelled = true;
+      finish();
+    }
+    return;
+  }
   if (lookupPending) {
     lookupPending = false;
     performLookup();
@@ -148,6 +234,9 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   if (page) page->render(renderer, fontId, marginLeft, marginTop);
 
+  if (dictPicker.processRender(renderer, mappedInput)) return;
+  // Choosing shows nothing but the picker, so skip the refresh before it opens.
+  if (purpose == Purpose::ChooseDictionary) return;
   if (popup != Popup::None) {
     GUI.drawPopup(renderer, I18N.get(popupMsg));
     return;

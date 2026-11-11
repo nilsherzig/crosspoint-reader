@@ -89,12 +89,7 @@ void SettingsActivity::rebuildSettings() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
-  // picks up dictionaries copied to the SD card since the last visit.
-  std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
-
-  auto all = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+  auto all = getSettingsList(&sdFontSystem.registry());
 
   const size_t count = std::count_if(all.begin(), all.end(), [this](const SettingInfo& setting) {
     return sectionFor(setting) == section && showOnDevice(setting);

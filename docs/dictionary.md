@@ -20,11 +20,21 @@ Not supported: dictionaries with 64-bit index offsets (`idxoffsetbits=64` in the
 
 ## Setting Up a Dictionary
 
-1. Copy your dictionary folder(s) to `/dictionaries/` on the SD card — one dictionary per folder, e.g. `/dictionaries/webster/webster.idx` + `webster.dict.dz`. A hidden `/.dictionaries/` folder (dot-prefixed) works the same way, for keeping it out of the file browser.
-2. Open **Settings → Reader → Dictionary** on the device.
-3. Select a dictionary from the list, or **None** to disable lookups.
+Copy your dictionary folder(s) to `/dictionaries/` on the SD card — one dictionary per folder, e.g. `/dictionaries/webster/webster.idx` + `webster.dict.dz`. A hidden `/.dictionaries/` folder (dot-prefixed) works the same way, for keeping it out of the file browser. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
 
-The Dictionary setting only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
+Lookups are available as soon as one usable dictionary is on the SD card. To turn them off, remove the dictionary folders.
+
+## Choosing a Dictionary per Book
+
+Each book remembers its own dictionary, so a German book can use a German dictionary and an English book an English one.
+
+- With one dictionary, every book uses it without asking.
+- With two or more, the first lookup in a book asks which dictionary to use. The choice is saved for that book. **Back**, or a tap outside the dialog, cancels the lookup and saves nothing.
+- To change the book's dictionary later, choose **Change Dictionary** in the reader menu. This entry appears when two or more dictionaries exist.
+- If the saved dictionary's folder is removed, the next lookup asks again.
+- The choice is stored in the book's cache. **Delete Book Cache** clears it.
+- The dialog lists at most 16 dictionaries: the first 16 by folder name.
+- A folder name that exists in both `/dictionaries/` and `/.dictionaries/` counts once; the one in `/dictionaries/` is used.
 
 ## Looking Up Words and Phrases
 
@@ -78,7 +88,7 @@ Definitions are drawn in your reading font. Dictionaries may use IPA symbols (e.
 
 During definition word selection, press **Back** to cancel selection first, then hold **Back** or long-press the header Back arrow to leave the lookup chain.
 
-Nested lookups use the same dictionary. Both formatted and plain-text definitions support selection.
+Nested lookups use the same dictionary as the book. Both formatted and plain-text definitions support selection.
 Returning to a previous definition restores its page and remembers its selection for the next press of **Confirm**.
 
 The reader keeps up to 16 previous definitions. At this limit, another lookup shows a brief message and leaves the current definition open.

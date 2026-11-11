@@ -59,6 +59,7 @@
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/DictionaryRegistry.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -348,10 +349,11 @@ void EpubReaderActivity::openReaderMenu() {
   const ChapterPosition position = chapterPosition();
   const int bookProgressPercent = bookPercentFor(position);
 
+  const size_t dictionaryCount = DictionaryRegistry::count(2);
   startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                              renderer, mappedInput, epub->getTitle(), position.displayPage(), position.totalPages,
                              bookProgressPercent, SETTINGS.orientation, !currentPageFootnotes.empty(),
-                             !cachedBookmarks.empty(), CLIPPINGS.hasClippings(), selectedMenuAction),
+                             !cachedBookmarks.empty(), CLIPPINGS.hasClippings(), dictionaryCount, selectedMenuAction),
                          [this](const ActivityResult& result) {
                            const auto& menu = std::get<MenuResult>(result.data);
 
@@ -444,13 +446,34 @@ void EpubReaderActivity::backgroundBuildTick() {
 }
 
 void EpubReaderActivity::openDictionaryWordSelect() {
-  if (SETTINGS.dictionaryName[0] == '\0') {
+  if (DictionaryRegistry::count(1) == 0) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
     return;
   }
   startClipSelection(-1, -1, ClipSelectionActivity::Mode::Lookup);
+}
+
+void EpubReaderActivity::openDictionaryChoice() {
+  if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
+  auto page = section->loadPage(section->currentPage);
+  if (!page) {
+    LOG_ERR("DICT", "Failed to load page for the dictionary picker");
+    requestUpdate();
+    return;
+  }
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  auto picker = makeUniqueNoThrow<DictionaryWordSelectActivity>(
+      renderer, mappedInput, std::move(page), left + SETTINGS.screenMargin, top + SETTINGS.screenMargin, std::string{},
+      epub->getCachePath(), DictionaryWordSelectActivity::Purpose::ChooseDictionary);
+  if (!picker) {
+    LOG_ERR("DICT", "OOM: dictionary picker");
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(picker), [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::startClipSelection(const int initialX, const int initialY,
@@ -543,9 +566,9 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       }
       int top, right, bottom, left;
       renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
-      auto lookup = makeUniqueNoThrow<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
-                                                                    left + SETTINGS.screenMargin,
-                                                                    top + SETTINGS.screenMargin, clipping.text);
+      auto lookup = makeUniqueNoThrow<DictionaryWordSelectActivity>(
+          renderer, mappedInput, std::move(page), left + SETTINGS.screenMargin, top + SETTINGS.screenMargin,
+          clipping.text, epub->getCachePath(), DictionaryWordSelectActivity::Purpose::Lookup);
       if (!lookup) {
         LOG_ERR("CLIP", "OOM: dictionary lookup activity");
         requestUpdate();
@@ -1224,6 +1247,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::DICTIONARY: {
       openDictionaryWordSelect();
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::CHANGE_DICTIONARY: {
+      openDictionaryChoice();
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
@@ -1952,7 +1979,7 @@ void EpubReaderActivity::renderBook() {
   }
 
   if (showDictionaryMessage) {
-    GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
+    GUI.drawPopup(renderer, tr(STR_DICT_NONE_FOUND));
   }
 
   // Glyphs of a damaged .cpfont draw as blanks; say why, once per loaded font.
@@ -3082,7 +3109,7 @@ void EpubReaderActivity::applyReaderTextSettings() {
 void EpubReaderActivity::buildMoreActions() {
   using MA = EpubReaderMenuActivity::MenuAction;
   EpubReaderMenuActivity::buildMenuItems(moreItems, !currentPageFootnotes.empty(), !cachedBookmarks.empty(),
-                                         CLIPPINGS.hasClippings());
+                                         CLIPPINGS.hasClippings(), DictionaryRegistry::count(2));
   moreItems.erase(std::remove_if(moreItems.begin(), moreItems.end(),
                                  [](const auto& item) {
                                    return item.action == MA::SELECT_CHAPTER || item.action == MA::TEXT_SETTINGS;

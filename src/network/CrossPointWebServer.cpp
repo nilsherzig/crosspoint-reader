@@ -57,7 +57,6 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "html/js/plugin_hostJs.generated.h"
 #include "util/BookCacheUtils.h"
-#include "util/DictionaryRegistry.h"
 #include "util/FirmwareIdentity.h"
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
@@ -1436,9 +1435,7 @@ void CrossPointWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // three built-in fonts.
-  std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
-  const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+  const auto& settings = getSettingsList(&sdFontSystem.registry());
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
@@ -1562,9 +1559,7 @@ void CrossPointWebServer::handlePostSettings() {
     return;
   }
 
-  std::vector<DictionaryEntry> dictionaries;
-  DictionaryRegistry::discover(dictionaries);
-  const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+  const auto& settings = getSettingsList(&sdFontSystem.registry());
   int applied = 0;
 
   for (const auto& s : settings) {
