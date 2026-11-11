@@ -33,9 +33,6 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "TextSettingsActivity.h"
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-#include "activities/flashcards/FlashcardSettingsActivity.h"
-#endif
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
@@ -150,12 +147,6 @@ void SettingsActivity::rebuildSettings() {
     addAction(SettingsSection::General, StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate);
   }
   addAction(SettingsSection::General, StrId::STR_ABOUT, SettingAction::About);
-
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-  if (BoardConfig::isX4Pro() && section == SettingsSection::Flashcards) {
-    settings.push_back(SettingInfo::Action(StrId::STR_FLASHCARDS, SettingAction::FlashcardSettings));
-  }
-#endif
   rebuildRowItems();
 }
 
@@ -415,15 +406,6 @@ void SettingsActivity::toggleSelectedSetting() {
           LOG_ERR("SETTINGS", "OOM: AboutActivity");
         }
         break;
-#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
-      case SettingAction::FlashcardSettings:
-        if (auto activity = makeUniqueNoThrow<FlashcardSettingsActivity>(renderer, mappedInput)) {
-          startActivityForResult(std::move(activity), nullptr);
-        } else {
-          LOG_ERR("SETTINGS", "OOM: FlashcardSettingsActivity");
-        }
-        break;
-#endif
       case SettingAction::None:
         // Do nothing
         break;

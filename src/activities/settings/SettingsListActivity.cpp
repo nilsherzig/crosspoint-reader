@@ -9,6 +9,9 @@
 
 #include "MappedInputManager.h"
 #include "SettingsActivity.h"
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include "activities/flashcards/FlashcardSettingsActivity.h"
+#endif
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 
@@ -104,9 +107,18 @@ void SettingsListActivity::openSection(const SettingsSection section) {
       break;
     }
   }
-  auto activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section);
+  std::unique_ptr<Activity> activity;
+#if defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+  // Flashcard settings live in their own store, not the shared settings list.
+  if (section == SettingsSection::Flashcards) {
+    activity = makeUniqueNoThrow<FlashcardSettingsActivity>(renderer, mappedInput);
+  } else
+#endif
+  {
+    activity = makeUniqueNoThrow<SettingsActivity>(renderer, mappedInput, section);
+  }
   if (!activity) {
-    LOG_ERR("SETTINGS", "OOM: SettingsActivity");
+    LOG_ERR("SETTINGS", "OOM: settings section");
     return;
   }
   startActivityForResult(std::move(activity), [this](const ActivityResult&) {
