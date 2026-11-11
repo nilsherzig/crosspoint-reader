@@ -26,6 +26,11 @@
 // publication so a release cannot be dropped during a highlight repaint.
 class OptionPopup {
  public:
+  // The dialog has no scrolling, so options past MAX_OPTIONS would render off
+  // screen anyway; a fixed cap keeps the DialogOption array on the stack and
+  // the interaction table small.
+  static constexpr int MAX_OPTIONS = 16;
+
   void show(StrId titleId, const StrId* optionIds, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
     title = I18N.get(titleId);
@@ -268,10 +273,7 @@ class OptionPopup {
   }
 
  private:
-  // The dialog has no scrolling, so options past MAX_OPTIONS would render off
-  // screen anyway; a fixed cap keeps the DialogOption array on the stack and
-  // the interaction table small. +1 slot for the chrome guard rect.
-  static constexpr int MAX_OPTIONS = 16;
+  // +1 slot for the chrome guard rect.
   static constexpr size_t INTERACTION_CAPACITY = MAX_OPTIONS + 1;
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;

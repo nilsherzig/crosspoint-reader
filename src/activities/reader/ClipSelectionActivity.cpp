@@ -72,9 +72,7 @@ ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputM
 
 void ClipSelectionActivity::onEnter() {
   Activity::onEnter();
-  std::string dictionaryPath;
-  lookupAvailable =
-      mode == Mode::DefinitionLookup || DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryPath);
+  lookupAvailable = mode == Mode::DefinitionLookup || DictionaryRegistry::count(1) > 0;
   fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
   const bool extracted = extractWords();
